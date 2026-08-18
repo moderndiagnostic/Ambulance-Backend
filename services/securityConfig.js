@@ -51,12 +51,15 @@ function getPlatformSeedKey() {
 }
 
 /**
- * DEMO OTP (123456) only outside production, and only if ALLOW_DEMO_OTP is not "false".
- * Production never accepts hardcoded DEMO OTP — even if someone sends 123456.
+ * DEMO OTP (123456):
+ * - Dev: default on (set ALLOW_DEMO_OTP=false to turn off)
+ * - Production: default off. Live pe SMS na ho to AWS .env mein ALLOW_DEMO_OTP=true
  */
 function allowDemoOtp() {
-  if (isProduction()) return false;
-  return String(process.env.ALLOW_DEMO_OTP || "true").toLowerCase() !== "false";
+  const flag = String(process.env.ALLOW_DEMO_OTP || "").toLowerCase();
+  if (flag === "true") return true;
+  if (flag === "false") return false;
+  return !isProduction();
 }
 
 const DEMO_OTP = "123456";
