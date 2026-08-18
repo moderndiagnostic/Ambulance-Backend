@@ -10,9 +10,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Deploy to AWS
         uses: appleboy/ssh-action@v1.2.2
         with:
@@ -21,7 +18,6 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             set -e
-
             cd /var/www/Ambulance-Backend
 
             echo "Pulling latest code..."
@@ -29,23 +25,40 @@ jobs:
             git reset --hard origin/main
 
             echo "Installing backend dependencies..."
-            npm ci --omit=dev
+            npm install --omit=dev
 
             echo "Building admin..."
             cd admin-web
-            npm ci
+            npm install
             npm run build
-
             cd ..
 
             echo "Restarting Ambulance Backend..."
             pm2 restart ambulance-backend --update-env
+            pm2 save
 
             echo "Checking PM2..."
             pm2 status ambulance-backend
 
-            echo "Health check..."
-            sleep 3
-            curl -f http://127.0.0.1:3011/v1/api || exit 1
+            PORT=$(grep -E '^PORT=' .env 2>/dev/null | cut -d= -f2 | tr -d '\r' | head -1)
+            PORT=${PORT:-3011}
+
+            echo "Health check on :$PORT/health ..."
+            ok=0
+            for i in 1 2 3 4 5 6 7 8; do
+              if curl -sf "http://127.0.0.1:${PORT}/health"; then
+                echo ""
+                echo "Health OK"
+                ok=1
+                break
+              fi
+              echo "wait ($i)..."
+              sleep 2
+            done
+            if [ "$ok" != "1" ]; then
+              echo "Health check failed"
+              pm2 logs ambulance-backend --lines 40 --nostream
+              exit 1
+            fi
 
             echo "Deployment successful!"
