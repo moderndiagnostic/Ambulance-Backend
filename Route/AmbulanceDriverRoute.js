@@ -1,0 +1,783 @@
+const express = require("express");
+const router = express.Router();
+const Ambulance = require("../Models/Ambulance");
+const AmbulanceTrip = require("../Models/AmbulanceTrip");
+const AmbulanceShift = require("../Models/AmbulanceShift");
+const { verifyAmbulanceDriver } = require("./ambulanceAuthMiddleware");
+const { haversineKm, ymd, appendTripPath } = require("../services/geo");
+const { generateAmbulanceTripId } = require("../services/ambulanceTripId");
+const { saveDataUrlImage } = require("../services/media");
+
+const MAX_REALISTIC_PING_KM = 3;
+
+const NEXT_STATUS = {
+  Assigned: ["Accepted", "Rejected"],
+  Accepted: ["EnRoutePickup"],
+  EnRoutePickup: ["ArrivedPickup"],
+  ArrivedPickup: ["Onboard"],
+  Onboard: ["EnRouteDrop"],
+  EnRouteDrop: ["ArrivedDrop"],
+  ArrivedDrop: ["Completed"],
+};
+
+const OPEN_STATUSES = [
+  "Assigned",
+  "Accepted",
+  "EnRoutePickup",
+  "ArrivedPickup",
+  "Onboard",
+  "EnRouteDrop",
+  "ArrivedDrop",
+];
+
+function formatDriver(d) {
+  return {
+    id: d._id,
+    role: "driver",
+    name: d.name,
+    phone: d.phone,
+    employeeId: d.employeeId,
+    dutyStatus: d.dutyStatus,
+    city: d.city,
+    zone: d.zone,
+    assignedAmbulance: d.assignedAmbulance,
+    currentLat: d.currentLat,
+    currentLng: d.currentLng,
+    lastLocationAt: d.lastLocationAt,
+    todayDistanceKm: d.todayDistanceKm || 0,
+  };
+}
+
+function formatTrip(t) {
+  return {
+    id: t._id,
+    tripId: t.tripId,
+    patientName: t.patientName,
+    mobileNumber: t.mobileNumber,
+    pickupAddress: t.pickupAddress,
+    pickupLat: t.pickupLat,
+    pickupLng: t.pickupLng,
+    dropAddress: t.dropAddress,
+    dropLat: t.dropLat,
+    dropLng: t.dropLng,
+    hospitalName: t.hospitalName,
+    city: t.city,
+    requestedType: t.requestedType,
+    notes: t.notes,
+    assignedDriverName: t.assignedDriverName,
+    vehicleNumber: t.vehicleNumber,
+    tripStatus: t.tripStatus,
+    rejectedReason: t.rejectedReason,
+    acceptedAt: t.acceptedAt,
+    enRoutePickupAt: t.enRoutePickupAt,
+    arrivedPickupAt: t.arrivedPickupAt,
+    onboardAt: t.onboardAt,
+    enRouteDropAt: t.enRouteDropAt,
+    arrivedDropAt: t.arrivedDropAt,
+    completedAt: t.completedAt,
+    liveLat: t.liveLat,
+    liveLng: t.liveLng,
+    startOdometerKm: t.startOdometerKm,
+    startOdometerPhotoUrl: t.startOdometerPhotoUrl || "",
+    startVehiclePhotoUrl: t.startVehiclePhotoUrl || "",
+    startProofAt: t.startProofAt,
+    endOdometerKm: t.endOdometerKm,
+    endOdometerPhotoUrl: t.endOdometerPhotoUrl || "",
+    endVehiclePhotoUrl: t.endVehiclePhotoUrl || "",
+    endProofAt: t.endProofAt,
+    createdAt: t.createdAt,
+  };
+}
+
+async function requireReadyShift(req, res) {
+  if (req.driver.dutyStatus !== "on_duty") {
+    res.status(400).json({
+      success: false,
+      message: "Go on duty (start-of-day check-in) before taking a trip",
+      needCheckIn: true,
+    });
+    return null;
+  }
+  const shift = await AmbulanceShift.findOne({
+    driver: req.driver._id,
+    dateKey: ymd(),
+    checkOutAt: null,
+  });
+  if (!shift || !shift.ambulance) {
+    res.status(400).json({
+      success: false,
+      message: "Start-of-day vehicle check-in required",
+      needCheckIn: true,
+    });
+    return null;
+  }
+  const busy = await AmbulanceTrip.findOne({
+    assignedDriver: req.driver._id,
+    tripStatus: { $in: OPEN_STATUSES },
+  });
+  if (busy) {
+    res.status(400).json({
+      success: false,
+      message: "Finish your current trip first",
+      activeTripId: busy._id,
+    });
+    return null;
+  }
+  return shift;
+}
+
+function cityPoolFilter(driver) {
+  if (!driver.city) return {};
+  return { $or: [{ city: driver.city }, { city: "" }, { city: { $exists: false } }] };
+}
+
+async function assignTripToDriver(trip, driver, shift) {
+  const ambulance = await Ambulance.findById(shift.ambulance);
+  if (!ambulance) {
+    const err = new Error("Checked-in vehicle not found");
+    err.status = 400;
+    throw err;
+  }
+  if (ambulance.status === "maintenance") {
+    const err = new Error("Vehicle is in maintenance");
+    err.status = 400;
+    throw err;
+  }
+  trip.assignedDriver = driver._id;
+  trip.assignedDriverName = driver.name;
+  trip.assignedAmbulance = ambulance._id;
+  trip.vehicleNumber = ambulance.vehicleNumber || shift.vehicleNumber;
+  trip.assignedAt = new Date();
+  trip.assignedByName = `${driver.name} (driver)`;
+  if (ambulance.status !== "on_trip") {
+    ambulance.status = "on_trip";
+    await ambulance.save();
+  }
+  return trip;
+}
+
+async function loadOwnTrip(req, res) {
+  const trip = await AmbulanceTrip.findOne({
+    _id: req.params.id,
+    assignedDriver: req.driver._id,
+  });
+  if (!trip) {
+    res.status(404).json({ success: false, message: "Trip not found" });
+    return null;
+  }
+  return trip;
+}
+
+async function releaseVehicle(trip) {
+  if (!trip.assignedAmbulance) return;
+  await Ambulance.findByIdAndUpdate(trip.assignedAmbulance, { status: "available" });
+}
+
+router.get("/ambulance/me", verifyAmbulanceDriver, async (req, res) => {
+  res.json({ success: true, driver: formatDriver(req.driver) });
+});
+
+router.put("/ambulance/duty-status", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const { dutyStatus } = req.body;
+    if (!["on_duty", "off_duty"].includes(dutyStatus)) {
+      return res.status(400).json({ success: false, message: "Invalid duty status" });
+    }
+    if (dutyStatus === "on_duty") {
+      const open = await AmbulanceShift.findOne({
+        driver: req.driver._id,
+        dateKey: ymd(),
+        checkOutAt: null,
+      });
+      if (!open) {
+        return res.status(400).json({
+          success: false,
+          message: "Start-of-day vehicle check-in required before going on duty",
+          needCheckIn: true,
+        });
+      }
+    }
+    req.driver.dutyStatus = dutyStatus;
+    await req.driver.save();
+    res.json({ success: true, dutyStatus: req.driver.dutyStatus, driver: formatDriver(req.driver) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post("/ambulance/location", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const { lat, lng } = req.body;
+    if (typeof lat !== "number" || typeof lng !== "number") {
+      return res.status(400).json({ success: false, message: "lat/lng required" });
+    }
+    const todayKey = ymd();
+    const sameDay = req.driver.todayDistanceDateKey === todayKey;
+    if (
+      sameDay &&
+      typeof req.driver.currentLat === "number" &&
+      typeof req.driver.currentLng === "number"
+    ) {
+      const deltaKm = haversineKm(req.driver.currentLat, req.driver.currentLng, lat, lng);
+      if (deltaKm <= MAX_REALISTIC_PING_KM) {
+        req.driver.todayDistanceKm =
+          Math.round(((req.driver.todayDistanceKm || 0) + deltaKm) * 100) / 100;
+        const shift = await AmbulanceShift.findOne({
+          driver: req.driver._id,
+          dateKey: todayKey,
+          checkOutAt: null,
+        });
+        if (shift) {
+          shift.gpsKm = Math.round(((shift.gpsKm || 0) + deltaKm) * 100) / 100;
+          await shift.save();
+        }
+      }
+    } else if (!sameDay) {
+      req.driver.todayDistanceKm = 0;
+    }
+    req.driver.todayDistanceDateKey = todayKey;
+
+    req.driver.currentLat = lat;
+    req.driver.currentLng = lng;
+    req.driver.lastLocationAt = new Date();
+    const trail = Array.isArray(req.driver.locationTrail) ? req.driver.locationTrail : [];
+    trail.push({ lat, lng, at: req.driver.lastLocationAt });
+    req.driver.locationTrail = trail.slice(-80);
+    await req.driver.save();
+
+    const active = await AmbulanceTrip.findOne({
+      assignedDriver: req.driver._id,
+      tripStatus: { $in: OPEN_STATUSES },
+    }).sort({ updatedAt: -1 });
+    if (active) {
+      const at = new Date();
+      active.liveLat = lat;
+      active.liveLng = lng;
+      active.liveAt = at;
+      appendTripPath(active, lat, lng, at);
+      await active.save();
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post("/ambulance/push-token", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    req.driver.pushToken = String(req.body?.token || "").trim();
+    await req.driver.save();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get("/ambulance/trips", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const trips = await AmbulanceTrip.find({
+      assignedDriver: req.driver._id,
+      tripStatus: { $nin: ["Rejected", "Cancelled"] },
+    }).sort({ createdAt: -1 });
+    res.json({ success: true, trips: trips.map(formatTrip) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get("/ambulance/trips/open", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const trips = await AmbulanceTrip.find({
+      tripStatus: "Unassigned",
+      ...cityPoolFilter(req.driver),
+    }).sort({ createdAt: -1 }).limit(50);
+    res.json({ success: true, trips: trips.map(formatTrip) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post("/ambulance/trips/create", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const shift = await requireReadyShift(req, res);
+    if (!shift) return;
+    const {
+      patientName,
+      mobileNumber,
+      pickupAddress,
+      dropAddress,
+      hospitalName,
+      requestedType,
+      notes,
+      pickupLat,
+      pickupLng,
+      dropLat,
+      dropLng,
+    } = req.body || {};
+    if (!patientName || !pickupAddress || !dropAddress) {
+      return res.status(400).json({
+        success: false,
+        message: "Patient name, pickup and hospital/drop address required",
+      });
+    }
+    const trip = new AmbulanceTrip({
+      tripId: await generateAmbulanceTripId(),
+      patientName: String(patientName).trim(),
+      mobileNumber: mobileNumber ? String(mobileNumber).trim() : "",
+      pickupAddress: String(pickupAddress).trim(),
+      dropAddress: String(dropAddress).trim(),
+      hospitalName: hospitalName ? String(hospitalName).trim() : "",
+      city: req.driver.city || "",
+      requestedType: ["BLS", "ALS", "ICU"].includes(requestedType) ? requestedType : "BLS",
+      notes: notes ? String(notes).trim() : "",
+      pickupLat: typeof pickupLat === "number" ? pickupLat : null,
+      pickupLng: typeof pickupLng === "number" ? pickupLng : null,
+      dropLat: typeof dropLat === "number" ? dropLat : null,
+      dropLng: typeof dropLng === "number" ? dropLng : null,
+      tripStatus: "Accepted",
+      acceptedAt: new Date(),
+    });
+    await assignTripToDriver(trip, req.driver, shift);
+    await trip.save();
+    res.status(201).json({ success: true, trip: formatTrip(trip) });
+  } catch (error) {
+    res.status(error.status || 500).json({ success: false, message: error.message });
+  }
+});
+
+router.post("/ambulance/trips/:id/claim", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const shift = await requireReadyShift(req, res);
+    if (!shift) return;
+    const ambulance = await Ambulance.findById(shift.ambulance);
+    if (!ambulance) {
+      return res.status(400).json({ success: false, message: "Checked-in vehicle not found" });
+    }
+    if (ambulance.status === "maintenance") {
+      return res.status(400).json({ success: false, message: "Vehicle is in maintenance" });
+    }
+    const trip = await AmbulanceTrip.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        tripStatus: "Unassigned",
+        ...cityPoolFilter(req.driver),
+      },
+      {
+        $set: {
+          tripStatus: "Assigned",
+          assignedDriver: req.driver._id,
+          assignedDriverName: req.driver.name,
+          assignedAmbulance: ambulance._id,
+          vehicleNumber: ambulance.vehicleNumber || shift.vehicleNumber,
+          assignedAt: new Date(),
+          assignedByName: `${req.driver.name} (driver)`,
+        },
+      },
+      { new: true }
+    );
+    if (!trip) {
+      return res.status(404).json({
+        success: false,
+        message: "Trip not available — already taken or not in your city",
+      });
+    }
+    if (ambulance.status !== "on_trip") {
+      ambulance.status = "on_trip";
+      await ambulance.save();
+    }
+    res.json({ success: true, trip: formatTrip(trip) });
+  } catch (error) {
+    res.status(error.status || 500).json({ success: false, message: error.message });
+  }
+});
+
+router.get("/ambulance/trips/:id", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const trip = await loadOwnTrip(req, res);
+    if (!trip) return;
+    res.json({ success: true, trip: formatTrip(trip) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post("/ambulance/trips/:id/accept", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const trip = await loadOwnTrip(req, res);
+    if (!trip) return;
+    if (trip.tripStatus !== "Assigned") {
+      return res.status(400).json({ success: false, message: "Trip cannot be accepted in this status" });
+    }
+    const busy = await AmbulanceTrip.findOne({
+      assignedDriver: req.driver._id,
+      _id: { $ne: trip._id },
+      tripStatus: { $in: OPEN_STATUSES.filter((s) => s !== "Assigned") },
+    });
+    if (busy) {
+      return res.status(400).json({
+        success: false,
+        message: "Complete your current trip before accepting another",
+      });
+    }
+    trip.tripStatus = "Accepted";
+    trip.acceptedAt = new Date();
+    await trip.save();
+    res.json({ success: true, trip: formatTrip(trip) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post("/ambulance/trips/:id/start-proof", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const trip = await loadOwnTrip(req, res);
+    if (!trip) return;
+    if (!["Assigned", "Accepted"].includes(trip.tripStatus)) {
+      return res.status(400).json({ success: false, message: "Start photos only before leaving for pickup" });
+    }
+    const { odometerKm, odometerPhoto, vehiclePhoto, lat, lng } = req.body || {};
+    const odoPath = saveDataUrlImage(odometerPhoto, "trips");
+    const vehPath = saveDataUrlImage(vehiclePhoto, "trips");
+    if (!odoPath || !vehPath) {
+      return res.status(400).json({
+        success: false,
+        message: "Odometer photo and vehicle photo both required",
+      });
+    }
+    trip.startOdometerKm = odometerKm != null && odometerKm !== "" ? Number(odometerKm) : null;
+    trip.startOdometerPhotoUrl = odoPath;
+    trip.startVehiclePhotoUrl = vehPath;
+    trip.startProofAt = new Date();
+    trip.startProofLat = typeof lat === "number" ? lat : null;
+    trip.startProofLng = typeof lng === "number" ? lng : null;
+    if (typeof lat === "number" && typeof lng === "number") {
+      appendTripPath(trip, lat, lng, trip.startProofAt);
+    }
+    if (trip.tripStatus === "Assigned") {
+      trip.tripStatus = "Accepted";
+      trip.acceptedAt = trip.acceptedAt || new Date();
+    }
+    await trip.save();
+    res.json({ success: true, trip: formatTrip(trip) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post("/ambulance/trips/:id/end-proof", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const trip = await loadOwnTrip(req, res);
+    if (!trip) return;
+    if (trip.tripStatus !== "ArrivedDrop") {
+      return res.status(400).json({
+        success: false,
+        message: "End photos after reaching hospital, before complete",
+      });
+    }
+    const { odometerKm, odometerPhoto, vehiclePhoto } = req.body || {};
+    const odoPath = saveDataUrlImage(odometerPhoto, "trips");
+    if (!odoPath) {
+      return res.status(400).json({ success: false, message: "End odometer photo required" });
+    }
+    trip.endOdometerKm = odometerKm != null && odometerKm !== "" ? Number(odometerKm) : null;
+    trip.endOdometerPhotoUrl = odoPath;
+    if (vehiclePhoto) trip.endVehiclePhotoUrl = saveDataUrlImage(vehiclePhoto, "trips") || "";
+    trip.endProofAt = new Date();
+    await trip.save();
+    res.json({ success: true, trip: formatTrip(trip) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post("/ambulance/trips/:id/reject", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const trip = await loadOwnTrip(req, res);
+    if (!trip) return;
+    if (!["Assigned", "Accepted"].includes(trip.tripStatus)) {
+      return res.status(400).json({ success: false, message: "Trip cannot be rejected now" });
+    }
+    trip.tripStatus = "Rejected";
+    trip.rejectedReason = String(req.body.reason || "").trim();
+    trip.assignedDriver = null;
+    trip.assignedDriverName = "";
+    await trip.save();
+    await releaseVehicle(trip);
+    trip.assignedAmbulance = null;
+    trip.vehicleNumber = "";
+    trip.tripStatus = "Unassigned";
+    await trip.save();
+    res.json({ success: true, trip: formatTrip(trip) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+async function advance(req, res, expectedFrom, nextStatus, timeField) {
+  try {
+    const trip = await loadOwnTrip(req, res);
+    if (!trip) return;
+    const allowed = NEXT_STATUS[trip.tripStatus] || [];
+    if (trip.tripStatus !== expectedFrom || !allowed.includes(nextStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot move from ${trip.tripStatus} to ${nextStatus}`,
+      });
+    }
+    if (nextStatus === "EnRoutePickup" && !trip.startOdometerPhotoUrl) {
+      return res.status(400).json({
+        success: false,
+        message: "Odometer + vehicle photos required before starting the trip",
+        needStartProof: true,
+      });
+    }
+    if (nextStatus === "Completed" && !trip.endOdometerPhotoUrl) {
+      return res.status(400).json({
+        success: false,
+        message: "End odometer photo required before completing the trip",
+        needEndProof: true,
+      });
+    }
+    const { lat, lng } = req.body || {};
+    trip.tripStatus = nextStatus;
+    if (timeField) trip[timeField] = new Date();
+    if (typeof lat === "number" && typeof lng === "number") {
+      trip.liveLat = lat;
+      trip.liveLng = lng;
+      trip.liveAt = new Date();
+    }
+    const LEG_LABEL = {
+      EnRoutePickup: "En route to patient",
+      ArrivedPickup: "Arrived at pickup",
+      Onboard: "Patient onboard",
+      EnRouteDrop: "En route to hospital",
+      ArrivedDrop: "Arrived at hospital",
+      Completed: "Trip completed",
+    };
+    if (LEG_LABEL[nextStatus]) {
+      const shift = await AmbulanceShift.findOne({
+        driver: req.driver._id,
+        dateKey: ymd(),
+        checkOutAt: null,
+      });
+      if (shift) {
+        shift.legs.push({
+          type: nextStatus,
+          label: `${trip.tripId || "Trip"} · ${LEG_LABEL[nextStatus]}`,
+          at: new Date(),
+          lat: typeof lat === "number" ? lat : null,
+          lng: typeof lng === "number" ? lng : null,
+        });
+        await shift.save();
+      }
+    }
+    if (nextStatus === "Completed") {
+      trip.completedAt = new Date();
+      await releaseVehicle(trip);
+    }
+    await trip.save();
+    res.json({ success: true, trip: formatTrip(trip) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+router.post("/ambulance/trips/:id/en-route-pickup", verifyAmbulanceDriver, (req, res) =>
+  advance(req, res, "Accepted", "EnRoutePickup", "enRoutePickupAt")
+);
+router.post("/ambulance/trips/:id/arrived-pickup", verifyAmbulanceDriver, (req, res) =>
+  advance(req, res, "EnRoutePickup", "ArrivedPickup", "arrivedPickupAt")
+);
+router.post("/ambulance/trips/:id/onboard", verifyAmbulanceDriver, (req, res) =>
+  advance(req, res, "ArrivedPickup", "Onboard", "onboardAt")
+);
+router.post("/ambulance/trips/:id/en-route-drop", verifyAmbulanceDriver, (req, res) =>
+  advance(req, res, "Onboard", "EnRouteDrop", "enRouteDropAt")
+);
+router.post("/ambulance/trips/:id/arrived-drop", verifyAmbulanceDriver, (req, res) =>
+  advance(req, res, "EnRouteDrop", "ArrivedDrop", "arrivedDropAt")
+);
+router.post("/ambulance/trips/:id/complete", verifyAmbulanceDriver, (req, res) =>
+  advance(req, res, "ArrivedDrop", "Completed", "completedAt")
+);
+
+function formatShift(s) {
+  return {
+    id: s._id,
+    dateKey: s.dateKey,
+    vehicleNumber: s.vehicleNumber,
+    checkInAt: s.checkInAt,
+    checkOutAt: s.checkOutAt,
+    odometerStart: s.odometerStart,
+    odometerEnd: s.odometerEnd,
+    gpsKm: s.gpsKm || 0,
+    condition: s.condition || {},
+    legs: s.legs || [],
+  };
+}
+
+router.get("/ambulance/fleet", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const filter = { isActive: { $ne: false } };
+    if (req.driver.city) filter.city = req.driver.city;
+    const ambulances = await Ambulance.find(filter).sort({ vehicleNumber: 1 });
+    res.json({
+      success: true,
+      ambulances: ambulances.map((a) => ({
+        id: a._id,
+        vehicleNumber: a.vehicleNumber,
+        type: a.type,
+        status: a.status,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get("/ambulance/shift/today", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const shift = await AmbulanceShift.findOne({
+      driver: req.driver._id,
+      dateKey: ymd(),
+    }).sort({ checkInAt: -1 });
+    res.json({ success: true, shift: shift ? formatShift(shift) : null });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post("/ambulance/shift/check-in", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const dateKey = ymd();
+    const open = await AmbulanceShift.findOne({
+      driver: req.driver._id,
+      dateKey,
+      checkOutAt: null,
+    });
+    if (open) {
+      return res.status(400).json({ success: false, message: "Already checked in today" });
+    }
+    const { ambulanceId, odometerStart, lat, lng, condition } = req.body || {};
+    if (!ambulanceId) {
+      return res.status(400).json({ success: false, message: "Select a vehicle" });
+    }
+    const ambulance = await Ambulance.findById(ambulanceId);
+    if (!ambulance) return res.status(404).json({ success: false, message: "Ambulance not found" });
+
+    const cond = condition || {};
+    const shift = await AmbulanceShift.create({
+      driver: req.driver._id,
+      driverName: req.driver.name,
+      ambulance: ambulance._id,
+      vehicleNumber: ambulance.vehicleNumber,
+      city: req.driver.city || ambulance.city || "",
+      dateKey,
+      checkInAt: new Date(),
+      checkInLat: typeof lat === "number" ? lat : null,
+      checkInLng: typeof lng === "number" ? lng : null,
+      odometerStart: odometerStart != null ? Number(odometerStart) : null,
+      condition: {
+        fuelLevel: ["full", "half", "low"].includes(cond.fuelLevel) ? cond.fuelLevel : "",
+        tiresOk: cond.tiresOk !== false,
+        lightsOk: cond.lightsOk !== false,
+        sirenOk: cond.sirenOk !== false,
+        acOk: cond.acOk !== false,
+        stretcherOk: cond.stretcherOk !== false,
+        oxygenOk: cond.oxygenOk !== false,
+        notes: cond.notes ? String(cond.notes).trim() : "",
+      },
+      gpsKm: 0,
+      legs: [
+        {
+          type: "check_in",
+          label: `Day start · ${ambulance.vehicleNumber}`,
+          at: new Date(),
+          lat: typeof lat === "number" ? lat : null,
+          lng: typeof lng === "number" ? lng : null,
+        },
+      ],
+    });
+
+    req.driver.dutyStatus = "on_duty";
+    req.driver.assignedAmbulance = ambulance._id;
+    if (req.driver.todayDistanceDateKey !== dateKey) {
+      req.driver.todayDistanceKm = 0;
+      req.driver.todayDistanceDateKey = dateKey;
+    }
+    await req.driver.save();
+
+    res.status(201).json({
+      success: true,
+      shift: formatShift(shift),
+      driver: formatDriver(req.driver),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post("/ambulance/shift/check-out", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const shift = await AmbulanceShift.findOne({
+      driver: req.driver._id,
+      dateKey: ymd(),
+      checkOutAt: null,
+    });
+    if (!shift) {
+      return res.status(400).json({ success: false, message: "No open check-in today" });
+    }
+    const { lat, lng, odometerEnd } = req.body || {};
+    shift.checkOutAt = new Date();
+    shift.checkOutLat = typeof lat === "number" ? lat : null;
+    shift.checkOutLng = typeof lng === "number" ? lng : null;
+    if (odometerEnd != null) shift.odometerEnd = Number(odometerEnd);
+    shift.legs.push({
+      type: "check_out",
+      label: "Day end",
+      at: new Date(),
+      lat: shift.checkOutLat,
+      lng: shift.checkOutLng,
+    });
+    await shift.save();
+
+    req.driver.dutyStatus = "off_duty";
+    await req.driver.save();
+
+    res.json({ success: true, shift: formatShift(shift), driver: formatDriver(req.driver) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get("/ambulance/km-history", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const days = Math.min(90, Math.max(1, Number(req.query.days) || 30));
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const sinceKey = ymd(since);
+    const shifts = await AmbulanceShift.find({
+      driver: req.driver._id,
+      dateKey: { $gte: sinceKey },
+    }).sort({ dateKey: -1 });
+    res.json({
+      success: true,
+      rows: shifts.map((s) => ({
+        dateKey: s.dateKey,
+        vehicleNumber: s.vehicleNumber,
+        gpsKm: s.gpsKm || 0,
+        odometerKm:
+          s.odometerStart != null && s.odometerEnd != null
+            ? Math.max(0, s.odometerEnd - s.odometerStart)
+            : null,
+        checkInAt: s.checkInAt,
+        checkOutAt: s.checkOutAt,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+module.exports = router;
