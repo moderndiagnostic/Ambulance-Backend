@@ -10,6 +10,7 @@ const {
   assertSecurityConfig,
   getCorsOriginOption,
   isProduction,
+  allowDemoOtp,
 } = require("./services/securityConfig");
 const { seedPlatform } = require("./services/seed");
 const { authLimiter, otpSendLimiter } = require("./middleware/rateLimit");
@@ -127,7 +128,7 @@ async function start() {
     console.log("Admin → http://localhost:" + PORT + "/admin");
     console.log("Field app → http://localhost:" + PORT + "/v1/api");
     console.log(
-      `Security: NODE_ENV=${process.env.NODE_ENV || "development"} CORS=${isProduction() ? "restricted" : "dev-open"}`
+      `Security: NODE_ENV=${process.env.NODE_ENV || "development"} CORS=${isProduction() ? "restricted" : "dev-open"} DemoOTP=${allowDemoOtp() ? "ON-123456" : "OFF"}`
     );
   });
 }

@@ -51,15 +51,24 @@ function getPlatformSeedKey() {
 }
 
 /**
- * DEMO OTP (123456):
- * - Dev: default on (set ALLOW_DEMO_OTP=false to turn off)
- * - Production: default off. Live pe SMS na ho to AWS .env mein ALLOW_DEMO_OTP=true
+ * DEMO OTP (123456).
+ * ALLOW_DEMO_OTP=true  → hamesha on
+ * ALLOW_DEMO_OTP=false → hamesha off
+ * unset: SMS key na ho to on (live pe abhi SMS nahi), SMS ho to off
  */
 function allowDemoOtp() {
   const flag = String(process.env.ALLOW_DEMO_OTP || "").toLowerCase();
   if (flag === "true") return true;
   if (flag === "false") return false;
-  return !isProduction();
+  const hasSms = Boolean(
+    String(
+      process.env.SMS_API_KEY ||
+        process.env.MSG91_AUTH_KEY ||
+        process.env.TWILIO_AUTH_TOKEN ||
+        ""
+    ).trim()
+  );
+  return !hasSms;
 }
 
 const DEMO_OTP = "123456";
