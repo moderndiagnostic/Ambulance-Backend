@@ -1,0 +1,51 @@
+name: Deploy Ambulance Backend
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to AWS
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+
+            cd /var/www/Ambulance-Backend
+
+            echo "Pulling latest code..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "Installing backend dependencies..."
+            npm ci --omit=dev
+
+            echo "Building admin..."
+            cd admin-web
+            npm ci
+            npm run build
+
+            cd ..
+
+            echo "Restarting Ambulance Backend..."
+            pm2 restart ambulance-backend --update-env
+
+            echo "Checking PM2..."
+            pm2 status ambulance-backend
+
+            echo "Health check..."
+            sleep 3
+            curl -f http://127.0.0.1:3011/v1/api || exit 1
+
+            echo "Deployment successful!"
