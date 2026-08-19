@@ -68,6 +68,9 @@ function formatTrip(t) {
     vehicleNumber: t.vehicleNumber,
     tripStatus: t.tripStatus,
     rejectedReason: t.rejectedReason,
+    rescheduleRequested: !!t.rescheduleRequested,
+    rescheduleRequestedAt: t.rescheduleRequestedAt,
+    rescheduleRequestNote: t.rescheduleRequestNote,
     acceptedAt: t.acceptedAt,
     enRoutePickupAt: t.enRoutePickupAt,
     arrivedPickupAt: t.arrivedPickupAt,
@@ -436,7 +439,7 @@ router.post("/ambulance/trips/:id/start-proof", verifyAmbulanceDriver, async (re
     if (!["Assigned", "Accepted"].includes(trip.tripStatus)) {
       return res.status(400).json({ success: false, message: "Start photos only before leaving for pickup" });
     }
-    const { odometerKm, odometerPhoto, vehiclePhoto, lat, lng } = req.body || {};
+    const { odometerKm, odometerPhoto, vehiclePhoto, vehicleNumber, lat, lng } = req.body || {};
     const odoPath = saveDataUrlImage(odometerPhoto, "trips");
     const vehPath = saveDataUrlImage(vehiclePhoto, "trips");
     if (!odoPath || !vehPath) {
@@ -448,6 +451,7 @@ router.post("/ambulance/trips/:id/start-proof", verifyAmbulanceDriver, async (re
     trip.startOdometerKm = odometerKm != null && odometerKm !== "" ? Number(odometerKm) : null;
     trip.startOdometerPhotoUrl = odoPath;
     trip.startVehiclePhotoUrl = vehPath;
+    if (vehicleNumber) trip.vehicleNumber = String(vehicleNumber).trim().toUpperCase();
     trip.startProofAt = new Date();
     trip.startProofLat = typeof lat === "number" ? lat : null;
     trip.startProofLng = typeof lng === "number" ? lng : null;
@@ -484,6 +488,35 @@ router.post("/ambulance/trips/:id/end-proof", verifyAmbulanceDriver, async (req,
     trip.endOdometerPhotoUrl = odoPath;
     if (vehiclePhoto) trip.endVehiclePhotoUrl = saveDataUrlImage(vehiclePhoto, "trips") || "";
     trip.endProofAt = new Date();
+    await trip.save();
+    res.json({ success: true, trip: formatTrip(trip) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post("/ambulance/trips/:id/reschedule", verifyAmbulanceDriver, async (req, res) => {
+  try {
+    const trip = await loadOwnTrip(req, res);
+    if (!trip) return;
+    const allowed = ["Assigned", "Accepted", "EnRoutePickup", "ArrivedPickup"];
+    if (!allowed.includes(trip.tripStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: "This trip cannot be rescheduled now",
+      });
+    }
+    trip.rescheduleRequested = true;
+    trip.rescheduleRequestedAt = new Date();
+    trip.rescheduleRequestNote = String(req.body.reason || "Patient requested later").trim();
+    trip.tripStatus = "Unassigned";
+    trip.assignedDriver = null;
+    trip.assignedDriverName = "";
+    trip.assignedAt = null;
+    await trip.save();
+    await releaseVehicle(trip);
+    trip.assignedAmbulance = null;
+    trip.vehicleNumber = "";
     await trip.save();
     res.json({ success: true, trip: formatTrip(trip) });
   } catch (error) {
