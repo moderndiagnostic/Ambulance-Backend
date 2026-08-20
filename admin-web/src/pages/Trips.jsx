@@ -14,6 +14,8 @@ const empty = {
   hospitalName: "",
   requestedType: "BLS",
   notes: "",
+  driverId: "",
+  ambulanceId: "",
 };
 
 function fmt(d) {
@@ -114,7 +116,16 @@ export default function Trips() {
     setSaving(true);
     setFormError("");
     try {
-      await ambulanceAdminApi.createTrip(form);
+      if ((form.driverId && !form.ambulanceId) || (!form.driverId && form.ambulanceId)) {
+        setFormError("Assign both driver and vehicle, or leave both empty");
+        setSaving(false);
+        return;
+      }
+      await ambulanceAdminApi.createTrip({
+        ...form,
+        driverId: form.driverId || undefined,
+        ambulanceId: form.ambulanceId || undefined,
+      });
       setShowAdd(false);
       setForm(empty);
       await load();
@@ -179,6 +190,7 @@ export default function Trips() {
   const freeAmbulances = ambulances.filter(
     (a) => a.isActive !== false && (a.status === "available" || a.id === assigning?.assignedAmbulance)
   );
+  const newTripVehicles = ambulances.filter((a) => a.isActive !== false && a.status === "available");
 
   return (
     <div>
@@ -205,7 +217,7 @@ export default function Trips() {
               <option>Cancelled</option>
             </select>
           </div>
-          <button className="btn-primary" onClick={() => setShowAdd(true)}>
+          <button className="btn-primary" onClick={() => { setForm(empty); setFormError(""); setShowAdd(true); }}>
             New trip
           </button>
         </div>
@@ -216,11 +228,12 @@ export default function Trips() {
               <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
                 <tr>
                   <th className="text-left px-4 py-3 font-medium">Trip</th>
+                  <th className="text-left px-4 py-3 font-medium">Assigned driver</th>
+                  <th className="text-left px-4 py-3 font-medium">Vehicle</th>
                   <th className="text-left px-4 py-3 font-medium">Patient</th>
                   <th className="text-left px-4 py-3 font-medium">Pickup</th>
                   <th className="text-left px-4 py-3 font-medium">Drop</th>
                   <th className="text-left px-4 py-3 font-medium">Status</th>
-                  <th className="text-left px-4 py-3 font-medium">Assigned to</th>
                   <th className="text-left px-4 py-3 font-medium">Flags</th>
                   <th className="text-right px-4 py-3 font-medium">Actions</th>
                 </tr>
@@ -228,13 +241,13 @@ export default function Trips() {
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
+                    <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
                       Loading trips…
                     </td>
                   </tr>
                 ) : trips.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
+                    <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
                       No ambulance trips yet.
                     </td>
                   </tr>
@@ -244,6 +257,12 @@ export default function Trips() {
                       <td className="px-4 py-3">
                         <div className="font-semibold text-brand-600">{t.tripId || "—"}</div>
                         <div className="text-[11px] text-slate-400">{fmt(t.createdAt)}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-slate-800">{t.assignedDriverName || "Unassigned"}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="text-slate-800">{t.vehicleNumber || "—"}</div>
                       </td>
                       <td className="px-4 py-3">
                         <div className="font-medium text-slate-800">{t.patientName}</div>
@@ -263,10 +282,6 @@ export default function Trips() {
                       <td className="px-4 py-3">
                         <Badge>{t.tripStatus}</Badge>
                         <div className="text-[11px] text-slate-400 mt-1">{t.requestedType}</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="text-slate-800">{t.assignedDriverName || "Unassigned"}</div>
-                        <div className="text-xs text-slate-400">{t.vehicleNumber || "—"}</div>
                       </td>
                       <td className="px-4 py-3">
                         {t.kmMismatch ? (
@@ -404,8 +419,40 @@ export default function Trips() {
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
             />
           </div>
+          <div>
+            <label className="label">Assigned driver</label>
+            <select
+              className="input"
+              value={form.driverId}
+              onChange={(e) => setForm({ ...form, driverId: e.target.value })}
+            >
+              <option value="">Assign later</option>
+              {drivers
+                .filter((d) => d.status === "active")
+                .map((d) => (
+                  <option key={d._id || d.id} value={d._id || d.id}>
+                    {d.name} · {d.employeeId} · {d.dutyStatus}
+                  </option>
+                ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Vehicle</label>
+            <select
+              className="input"
+              value={form.ambulanceId}
+              onChange={(e) => setForm({ ...form, ambulanceId: e.target.value })}
+            >
+              <option value="">Assign later</option>
+              {newTripVehicles.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.vehicleNumber} · {a.type} · {a.status}
+                </option>
+              ))}
+            </select>
+          </div>
           <button className="btn-primary w-full" disabled={saving}>
-            {saving ? "Saving…" : "Create trip"}
+            {saving ? "Saving…" : form.driverId && form.ambulanceId ? "Create & assign" : "Create trip"}
           </button>
         </form>
       </Modal>

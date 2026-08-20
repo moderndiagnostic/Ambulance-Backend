@@ -25,6 +25,98 @@ function resolvedCity(user, city) {
   return city ? String(city).trim() : "";
 }
 
+const ACTIVE_TRIP_STATUSES = [
+  "Assigned",
+  "Accepted",
+  "EnRoutePickup",
+  "ArrivedPickup",
+  "Onboard",
+  "EnRouteDrop",
+  "ArrivedDrop",
+];
+
+function createdAtFilter(query) {
+  const from = String(query?.from || "").trim();
+  const to = String(query?.to || "").trim();
+  if (!from && !to) return null;
+  const start = from ? dayRange(from).start : new Date(0);
+  const end = to ? dayRange(to).end : new Date(Date.now() + 24 * 60 * 60 * 1000);
+  return { start, end };
+}
+
+function chartWindow(query) {
+  const range = createdAtFilter(query);
+  if (range) return range;
+  const toKey = ymd();
+  const fromDate = new Date();
+  fromDate.setDate(fromDate.getDate() - 13);
+  return { start: dayRange(ymd(fromDate)).start, end: dayRange(toKey).end };
+}
+
+async function applyAssignment(user, trip, driverId, ambulanceId) {
+  if (!driverId || !ambulanceId) {
+    return { error: { status: 400, message: "driverId and ambulanceId required" } };
+  }
+  if (["Completed", "Cancelled"].includes(trip.tripStatus)) {
+    return { error: { status: 400, message: "Cannot assign a closed trip" } };
+  }
+
+  const driver = await AmbulanceDriver.findOne({
+    _id: driverId,
+    ...cityFilter(user),
+    status: "active",
+  });
+  if (!driver) return { error: { status: 404, message: "Driver not found" } };
+
+  const busy = await AmbulanceTrip.findOne({
+    assignedDriver: driver._id,
+    tripStatus: { $in: ACTIVE_TRIP_STATUSES },
+    _id: { $ne: trip._id },
+  });
+  if (busy) {
+    return { error: { status: 400, message: "Driver already has an active trip" } };
+  }
+
+  const ambulance = await Ambulance.findOne({
+    _id: ambulanceId,
+    ...cityFilter(user),
+    isActive: true,
+  });
+  if (!ambulance) return { error: { status: 404, message: "Ambulance not found" } };
+  if (ambulance.status === "maintenance") {
+    return { error: { status: 400, message: "Ambulance is in maintenance" } };
+  }
+  if (ambulance.status === "on_trip" && String(trip.assignedAmbulance) !== String(ambulance._id)) {
+    return { error: { status: 400, message: "Ambulance already on another trip" } };
+  }
+
+  if (trip.assignedAmbulance && String(trip.assignedAmbulance) !== String(ambulance._id)) {
+    await Ambulance.findByIdAndUpdate(trip.assignedAmbulance, { status: "available" });
+  }
+
+  trip.assignedDriver = driver._id;
+  trip.assignedDriverName = driver.name;
+  trip.assignedAmbulance = ambulance._id;
+  trip.vehicleNumber = ambulance.vehicleNumber;
+  trip.assignedAt = new Date();
+  trip.assignedByName = user.name || user.email || "";
+  trip.tripStatus = "Assigned";
+  trip.rejectedReason = "";
+  await trip.save();
+
+  ambulance.status = "on_trip";
+  await ambulance.save();
+
+  sendPushToPhlebo(
+    driver,
+    "New ambulance trip",
+    `${trip.patientName} — ${trip.pickupAddress}`,
+    { tripId: String(trip._id) }
+  ).catch(() => {});
+
+  return { trip };
+}
+
 function formatAmbulance(a) {
   return {
     id: a._id,
@@ -320,6 +412,8 @@ router.post("/admin/ambulance-trips", ...adminOnly, async (req, res) => {
       pickupLng,
       dropLat,
       dropLng,
+      driverId,
+      ambulanceId,
     } = req.body || {};
     if (!patientName || !pickupAddress || !dropAddress) {
       return res.status(400).json({
@@ -327,7 +421,13 @@ router.post("/admin/ambulance-trips", ...adminOnly, async (req, res) => {
         message: "Patient name, pickup and drop address required",
       });
     }
-    const trip = await AmbulanceTrip.create({
+    if ((driverId && !ambulanceId) || (!driverId && ambulanceId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Assign both driver and vehicle, or leave both empty",
+      });
+    }
+    let trip = await AmbulanceTrip.create({
       tripId: await generateAmbulanceTripId(),
       patientName: String(patientName).trim(),
       mobileNumber: mobileNumber ? String(mobileNumber).trim() : "",
@@ -343,6 +443,17 @@ router.post("/admin/ambulance-trips", ...adminOnly, async (req, res) => {
       dropLat: typeof dropLat === "number" ? dropLat : null,
       dropLng: typeof dropLng === "number" ? dropLng : null,
     });
+    if (driverId && ambulanceId) {
+      const assigned = await applyAssignment(req.user, trip, driverId, ambulanceId);
+      if (assigned.error) {
+        return res.status(assigned.error.status).json({
+          success: false,
+          message: assigned.error.message,
+          trip: formatTrip(trip),
+        });
+      }
+      trip = assigned.trip;
+    }
     res.status(201).json({ success: true, trip: formatTrip(trip) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -353,77 +464,12 @@ router.put("/admin/ambulance-trips/:id/assign", ...adminOnly, async (req, res) =
   try {
     const trip = await AmbulanceTrip.findOne({ _id: req.params.id, ...cityFilter(req.user) });
     if (!trip) return res.status(404).json({ success: false, message: "Trip not found" });
-    if (["Completed", "Cancelled"].includes(trip.tripStatus)) {
-      return res.status(400).json({ success: false, message: "Cannot assign a closed trip" });
-    }
     const { driverId, ambulanceId } = req.body || {};
-    if (!driverId || !ambulanceId) {
-      return res.status(400).json({ success: false, message: "driverId and ambulanceId required" });
+    const assigned = await applyAssignment(req.user, trip, driverId, ambulanceId);
+    if (assigned.error) {
+      return res.status(assigned.error.status).json({ success: false, message: assigned.error.message });
     }
-    const driver = await AmbulanceDriver.findOne({
-      _id: driverId,
-      ...cityFilter(req.user),
-      status: "active",
-    });
-    if (!driver) return res.status(404).json({ success: false, message: "Driver not found" });
-
-    const busy = await AmbulanceTrip.findOne({
-      assignedDriver: driver._id,
-      tripStatus: {
-        $in: [
-          "Assigned",
-          "Accepted",
-          "EnRoutePickup",
-          "ArrivedPickup",
-          "Onboard",
-          "EnRouteDrop",
-          "ArrivedDrop",
-        ],
-      },
-      _id: { $ne: trip._id },
-    });
-    if (busy) {
-      return res.status(400).json({ success: false, message: "Driver already has an active trip" });
-    }
-
-    const ambulance = await Ambulance.findOne({
-      _id: ambulanceId,
-      ...cityFilter(req.user),
-      isActive: true,
-    });
-    if (!ambulance) return res.status(404).json({ success: false, message: "Ambulance not found" });
-    if (ambulance.status === "maintenance") {
-      return res.status(400).json({ success: false, message: "Ambulance is in maintenance" });
-    }
-    if (ambulance.status === "on_trip" && String(trip.assignedAmbulance) !== String(ambulance._id)) {
-      return res.status(400).json({ success: false, message: "Ambulance already on another trip" });
-    }
-
-    if (trip.assignedAmbulance && String(trip.assignedAmbulance) !== String(ambulance._id)) {
-      await Ambulance.findByIdAndUpdate(trip.assignedAmbulance, { status: "available" });
-    }
-
-    trip.assignedDriver = driver._id;
-    trip.assignedDriverName = driver.name;
-    trip.assignedAmbulance = ambulance._id;
-    trip.vehicleNumber = ambulance.vehicleNumber;
-    trip.assignedAt = new Date();
-    trip.assignedByName = req.user.name || req.user.email || "";
-    trip.tripStatus = "Assigned";
-    trip.rejectedReason = "";
-    await trip.save();
-
-    ambulance.status = "on_trip";
-    await ambulance.save();
-
-    sendPushToPhlebo(
-      driver,
-      "New ambulance trip",
-      `${trip.patientName} — ${trip.pickupAddress}`,
-      { tripId: String(trip._id) }
-    ).catch(() => {});
-
-    res.json({ success: true, trip: formatTrip(trip) });
+    res.json({ success: true, trip: formatTrip(assigned.trip) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -482,16 +528,15 @@ router.get("/admin/dashboard", ...adminOnly, async (req, res) => {
   try {
     const city = cityFilter(req.user);
     const todayKey = ymd();
-    const { start, end } = dayRange(todayKey);
-    const activeStatuses = [
-      "Assigned",
-      "Accepted",
-      "EnRoutePickup",
-      "ArrivedPickup",
-      "Onboard",
-      "EnRouteDrop",
-      "ArrivedDrop",
-    ];
+    const { start: todayStart, end: todayEnd } = dayRange(todayKey);
+    const range = createdAtFilter(req.query);
+    const tripMatch = { ...city };
+    if (range) tripMatch.createdAt = { $gte: range.start, $lt: range.end };
+    const window = chartWindow(req.query);
+    const chartMatch = {
+      ...city,
+      createdAt: { $gte: window.start, $lt: window.end },
+    };
 
     const [
       totalTrips,
@@ -507,16 +552,18 @@ router.get("/admin/dashboard", ...adminOnly, async (req, res) => {
       fleetRows,
       todayShifts,
       statusRows,
+      typeRows,
+      dayRows,
       recent,
       auditTrips,
     ] = await Promise.all([
-      AmbulanceTrip.countDocuments(city),
-      AmbulanceTrip.countDocuments({ ...city, createdAt: { $gte: start, $lt: end } }),
-      AmbulanceTrip.countDocuments({ ...city, tripStatus: "Unassigned" }),
-      AmbulanceTrip.countDocuments({ ...city, tripStatus: "Completed" }),
-      AmbulanceTrip.countDocuments({ ...city, tripStatus: "Cancelled" }),
-      AmbulanceTrip.countDocuments({ ...city, tripStatus: "Rejected" }),
-      AmbulanceTrip.countDocuments({ ...city, tripStatus: { $in: activeStatuses } }),
+      AmbulanceTrip.countDocuments(tripMatch),
+      AmbulanceTrip.countDocuments({ ...city, createdAt: { $gte: todayStart, $lt: todayEnd } }),
+      AmbulanceTrip.countDocuments({ ...tripMatch, tripStatus: "Unassigned" }),
+      AmbulanceTrip.countDocuments({ ...tripMatch, tripStatus: "Completed" }),
+      AmbulanceTrip.countDocuments({ ...tripMatch, tripStatus: "Cancelled" }),
+      AmbulanceTrip.countDocuments({ ...tripMatch, tripStatus: "Rejected" }),
+      AmbulanceTrip.countDocuments({ ...city, tripStatus: { $in: ACTIVE_TRIP_STATUSES } }),
       AmbulanceDriver.countDocuments(city),
       AmbulanceDriver.countDocuments({ ...city, dutyStatus: "on_duty" }),
       AmbulanceDriver.countDocuments({
@@ -527,9 +574,31 @@ router.get("/admin/dashboard", ...adminOnly, async (req, res) => {
       }),
       Ambulance.find(city).select("status isActive"),
       AmbulanceShift.find({ ...city, dateKey: todayKey }),
-      AmbulanceTrip.aggregate([{ $match: city }, { $group: { _id: "$tripStatus", n: { $sum: 1 } } }]),
-      AmbulanceTrip.find(city).select("-path").sort({ createdAt: -1 }).limit(8),
-      AmbulanceTrip.find(city)
+      AmbulanceTrip.aggregate([{ $match: tripMatch }, { $group: { _id: "$tripStatus", n: { $sum: 1 } } }]),
+      AmbulanceTrip.aggregate([{ $match: tripMatch }, { $group: { _id: "$requestedType", n: { $sum: 1 } } }]),
+      AmbulanceTrip.aggregate([
+        { $match: chartMatch },
+        {
+          $group: {
+            _id: {
+              $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Kolkata" },
+            },
+            trips: { $sum: 1 },
+            completed: {
+              $sum: { $cond: [{ $eq: ["$tripStatus", "Completed"] }, 1, 0] },
+            },
+            cancelled: {
+              $sum: {
+                $cond: [{ $in: ["$tripStatus", ["Cancelled", "Rejected"]] }, 1, 0],
+              },
+            },
+            gpsKm: { $sum: { $ifNull: ["$gpsKm", 0] } },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]),
+      AmbulanceTrip.find(tripMatch).select("-path").sort({ createdAt: -1 }).limit(8),
+      AmbulanceTrip.find(tripMatch)
         .select(
           "tripStatus startOdometerKm endOdometerKm gpsKm startOdometerPhotoUrl startVehiclePhotoUrl endOdometerPhotoUrl startProofAt endProofAt"
         )
@@ -541,13 +610,36 @@ router.get("/admin/dashboard", ...adminOnly, async (req, res) => {
     statusRows.forEach((r) => {
       byStatus[r._id || "Unknown"] = r.n;
     });
+    const byType = {};
+    typeRows.forEach((r) => {
+      byType[r._id || "BLS"] = r.n;
+    });
+
+    const byDayMap = new Map(dayRows.map((r) => [r._id, r]));
+    const byDay = [];
+    const cursor = new Date(window.start);
+    while (cursor < window.end) {
+      const key = ymd(cursor);
+      const row = byDayMap.get(key);
+      byDay.push({
+        date: key,
+        trips: row?.trips || 0,
+        completed: row?.completed || 0,
+        cancelled: row?.cancelled || 0,
+        gpsKm: Math.round((row?.gpsKm || 0) * 10) / 10,
+      });
+      cursor.setDate(cursor.getDate() + 1);
+      if (byDay.length > 92) break;
+    }
 
     let kmMismatchCount = 0;
     let photosMissingCount = 0;
+    let gpsKmRange = 0;
     auditTrips.forEach((t) => {
       const formatted = formatTrip(t);
       if (formatted.kmMismatch) kmMismatchCount += 1;
       if (formatted.photosMissing.length) photosMissingCount += 1;
+      gpsKmRange += Number(formatted.gpsKm) || 0;
     });
 
     const gpsKmToday = Math.round(todayShifts.reduce((s, sh) => s + (Number(sh.gpsKm) || 0), 0) * 10) / 10;
@@ -557,6 +649,8 @@ router.get("/admin/dashboard", ...adminOnly, async (req, res) => {
     res.json({
       success: true,
       date: todayKey,
+      from: req.query.from || "",
+      to: req.query.to || "",
       totalTrips,
       todayTrips,
       unassigned,
@@ -568,6 +662,7 @@ router.get("/admin/dashboard", ...adminOnly, async (req, res) => {
       kmMismatchCount,
       photosMissingCount,
       gpsKmToday,
+      gpsKmRange: Math.round(gpsKmRange * 10) / 10,
       openCheckIns,
       drivers: { total: driversTotal, onDuty: driversOnDuty, liveGps },
       fleet: {
@@ -577,6 +672,8 @@ router.get("/admin/dashboard", ...adminOnly, async (req, res) => {
         maintenance: fleetActive.filter((a) => a.status === "maintenance").length,
       },
       byStatus,
+      byType,
+      byDay,
       recent: recent.map((t) => formatTrip(t)),
     });
   } catch (error) {
@@ -584,42 +681,78 @@ router.get("/admin/dashboard", ...adminOnly, async (req, res) => {
   }
 });
 
+function emptyDailyRow(driverId, driverName) {
+  return {
+    driverId: driverId || null,
+    driverName: driverName || "Unassigned",
+    vehicles: new Set(),
+    tripCount: 0,
+    completedCount: 0,
+    cancelledCount: 0,
+    unassignedCount: 0,
+    gpsKm: 0,
+    odoKm: 0,
+    kmMismatchCount: 0,
+    photosMissingCount: 0,
+    trips: [],
+    checkInAt: null,
+    checkOutAt: null,
+    odometerStart: null,
+    odometerEnd: null,
+    shiftGpsKm: 0,
+    shiftOdoKm: null,
+  };
+}
+
+function dutyHours(checkInAt, checkOutAt) {
+  if (!checkInAt) return null;
+  const start = new Date(checkInAt).getTime();
+  if (!Number.isFinite(start)) return null;
+  const end = checkOutAt ? new Date(checkOutAt).getTime() : Date.now();
+  if (!Number.isFinite(end)) return null;
+  return Math.max(0, Math.round(((end - start) / 3600000) * 10) / 10);
+}
+
+function shiftOdoOf(s) {
+  if (s.odometerStart == null || s.odometerEnd == null) return null;
+  const n = Number(s.odometerEnd) - Number(s.odometerStart);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.round(n * 10) / 10);
+}
+
 router.get("/admin/daily-sheet", ...adminOnly, async (req, res) => {
   try {
     const dateKey = String(req.query.date || ymd());
     const { start, end } = dayRange(dateKey);
-    const trips = await AmbulanceTrip.find({
-      ...cityFilter(req.user),
-      $or: [
-        { createdAt: { $gte: start, $lt: end } },
-        { assignedAt: { $gte: start, $lt: end } },
-        { completedAt: { $gte: start, $lt: end } },
-      ],
-    })
-      .select("-path")
-      .sort({ assignedDriverName: 1, createdAt: 1 });
+    const city = cityFilter(req.user);
+    const [trips, shifts] = await Promise.all([
+      AmbulanceTrip.find({
+        ...city,
+        $or: [
+          { createdAt: { $gte: start, $lt: end } },
+          { assignedAt: { $gte: start, $lt: end } },
+          { completedAt: { $gte: start, $lt: end } },
+        ],
+      })
+        .select("-path")
+        .sort({ assignedDriverName: 1, createdAt: 1 }),
+      AmbulanceShift.find({ ...city, dateKey }).sort({ checkInAt: 1 }),
+    ]);
 
     const byDriver = new Map();
+    function rowFor(key, driverId, driverName) {
+      if (!byDriver.has(key)) byDriver.set(key, emptyDailyRow(driverId, driverName));
+      return byDriver.get(key);
+    }
+
     for (const t of trips) {
       const formatted = formatTrip(t);
       const key = t.assignedDriver ? String(t.assignedDriver) : "unassigned";
-      if (!byDriver.has(key)) {
-        byDriver.set(key, {
-          driverId: t.assignedDriver || null,
-          driverName: t.assignedDriverName || "Unassigned",
-          vehicles: new Set(),
-          tripCount: 0,
-          completedCount: 0,
-          gpsKm: 0,
-          odoKm: 0,
-          kmMismatchCount: 0,
-          photosMissingCount: 0,
-          trips: [],
-        });
-      }
-      const row = byDriver.get(key);
+      const row = rowFor(key, t.assignedDriver || null, t.assignedDriverName || "Unassigned");
       row.tripCount += 1;
       if (t.tripStatus === "Completed") row.completedCount += 1;
+      if (t.tripStatus === "Cancelled" || t.tripStatus === "Rejected") row.cancelledCount += 1;
+      if (t.tripStatus === "Unassigned") row.unassignedCount += 1;
       if (t.vehicleNumber) row.vehicles.add(t.vehicleNumber);
       row.gpsKm += formatted.gpsKm || 0;
       if (formatted.odoKm != null) row.odoKm += formatted.odoKm;
@@ -629,37 +762,95 @@ router.get("/admin/daily-sheet", ...adminOnly, async (req, res) => {
         id: formatted.id,
         tripId: formatted.tripId,
         patientName: formatted.patientName,
+        mobileNumber: formatted.mobileNumber,
+        pickupAddress: formatted.pickupAddress,
+        dropAddress: formatted.dropAddress,
+        hospitalName: formatted.hospitalName,
+        requestedType: formatted.requestedType,
+        assignedDriverName: formatted.assignedDriverName,
+        vehicleNumber: formatted.vehicleNumber,
         tripStatus: formatted.tripStatus,
         gpsKm: formatted.gpsKm,
         odoKm: formatted.odoKm,
         kmMismatch: formatted.kmMismatch,
         kmMismatchPct: formatted.kmMismatchPct,
         photosMissing: formatted.photosMissing,
+        createdAt: formatted.createdAt,
+        completedAt: formatted.completedAt,
       });
     }
 
-    const rows = [...byDriver.values()].map((r) => ({
-      driverId: r.driverId,
-      driverName: r.driverName,
-      vehicles: [...r.vehicles],
-      tripCount: r.tripCount,
-      completedCount: r.completedCount,
-      gpsKm: Math.round(r.gpsKm * 10) / 10,
-      odoKm: Math.round(r.odoKm * 10) / 10,
-      kmMismatchCount: r.kmMismatchCount,
-      photosMissingCount: r.photosMissingCount,
-      trips: r.trips,
-    }));
+    for (const s of shifts) {
+      const key = s.driver ? String(s.driver) : `shift:${s._id}`;
+      const row = rowFor(key, s.driver || null, s.driverName || "Driver");
+      if (s.vehicleNumber) row.vehicles.add(s.vehicleNumber);
+      if (s.checkInAt && (!row.checkInAt || s.checkInAt < row.checkInAt)) row.checkInAt = s.checkInAt;
+      if (s.checkOutAt) {
+        if (!row.checkOutAt || s.checkOutAt > row.checkOutAt) row.checkOutAt = s.checkOutAt;
+      }
+      if (s.odometerStart != null && (row.odometerStart == null || s.odometerStart < row.odometerStart)) {
+        row.odometerStart = s.odometerStart;
+      }
+      if (s.odometerEnd != null && (row.odometerEnd == null || s.odometerEnd > row.odometerEnd)) {
+        row.odometerEnd = s.odometerEnd;
+      }
+      row.shiftGpsKm += Number(s.gpsKm) || 0;
+      const odo = shiftOdoOf(s);
+      if (odo != null) row.shiftOdoKm = Math.round(((row.shiftOdoKm || 0) + odo) * 10) / 10;
+    }
+
+    // If any shift still open, check-out should stay empty even if an older shift closed
+    for (const s of shifts) {
+      if (!s.driver || s.checkOutAt) continue;
+      const row = byDriver.get(String(s.driver));
+      if (row) row.checkOutAt = null;
+    }
+
+    const rows = [...byDriver.values()]
+      .map((r) => ({
+        driverId: r.driverId,
+        driverName: r.driverName,
+        vehicles: [...r.vehicles],
+        tripCount: r.tripCount,
+        completedCount: r.completedCount,
+        cancelledCount: r.cancelledCount,
+        unassignedCount: r.unassignedCount,
+        gpsKm: Math.round(r.gpsKm * 10) / 10,
+        tripOdoKm: Math.round(r.odoKm * 10) / 10,
+        odoKm: Math.round(r.odoKm * 10) / 10,
+        shiftGpsKm: Math.round(r.shiftGpsKm * 10) / 10,
+        shiftOdoKm: r.shiftOdoKm,
+        odometerStart: r.odometerStart,
+        odometerEnd: r.odometerEnd,
+        checkInAt: r.checkInAt,
+        checkOutAt: r.checkOutAt,
+        dutyHours: dutyHours(r.checkInAt, r.checkOutAt),
+        openCheckIn: !!(r.checkInAt && !r.checkOutAt),
+        kmMismatchCount: r.kmMismatchCount,
+        photosMissingCount: r.photosMissingCount,
+        trips: r.trips,
+      }))
+      .sort((a, b) => {
+        if (!a.driverId && b.driverId) return 1;
+        if (a.driverId && !b.driverId) return -1;
+        return String(a.driverName).localeCompare(String(b.driverName));
+      });
 
     res.json({
       success: true,
       date: dateKey,
       totals: {
-        drivers: rows.length,
+        drivers: rows.filter((r) => r.driverId).length,
         trips: trips.length,
+        completed: rows.reduce((s, r) => s + r.completedCount, 0),
+        cancelled: rows.reduce((s, r) => s + r.cancelledCount, 0),
+        unassigned: rows.reduce((s, r) => s + r.unassignedCount, 0),
         gpsKm: Math.round(rows.reduce((s, r) => s + r.gpsKm, 0) * 10) / 10,
+        tripOdoKm: Math.round(rows.reduce((s, r) => s + r.tripOdoKm, 0) * 10) / 10,
+        shiftOdoKm: Math.round(rows.reduce((s, r) => s + (r.shiftOdoKm || 0), 0) * 10) / 10,
         photosMissing: rows.reduce((s, r) => s + r.photosMissingCount, 0),
         kmMismatch: rows.reduce((s, r) => s + r.kmMismatchCount, 0),
+        openCheckIns: rows.filter((r) => r.openCheckIn).length,
       },
       rows,
     });

@@ -4,7 +4,7 @@ const Ambulance = require("../Models/Ambulance");
 const AmbulanceTrip = require("../Models/AmbulanceTrip");
 const AmbulanceShift = require("../Models/AmbulanceShift");
 const { verifyAmbulanceDriver } = require("./ambulanceAuthMiddleware");
-const { haversineKm, ymd, appendTripPath } = require("../services/geo");
+const { haversineKm, ymd, appendTripPath, odoTripKm } = require("../services/geo");
 const { generateAmbulanceTripId } = require("../services/ambulanceTripId");
 const { saveDataUrlImage } = require("../services/media");
 
@@ -49,6 +49,9 @@ function formatDriver(d) {
 }
 
 function formatTrip(t) {
+  const gpsKm = Math.round((Number(t.gpsKm) || 0) * 10) / 10;
+  const odoKm = odoTripKm(t.startOdometerKm, t.endOdometerKm);
+  const tripKm = odoKm != null && odoKm > 0 ? odoKm : gpsKm;
   return {
     id: t._id,
     tripId: t.tripId,
@@ -71,6 +74,7 @@ function formatTrip(t) {
     rescheduleRequested: !!t.rescheduleRequested,
     rescheduleRequestedAt: t.rescheduleRequestedAt,
     rescheduleRequestNote: t.rescheduleRequestNote,
+    assignedAt: t.assignedAt,
     acceptedAt: t.acceptedAt,
     enRoutePickupAt: t.enRoutePickupAt,
     arrivedPickupAt: t.arrivedPickupAt,
@@ -78,6 +82,7 @@ function formatTrip(t) {
     enRouteDropAt: t.enRouteDropAt,
     arrivedDropAt: t.arrivedDropAt,
     completedAt: t.completedAt,
+    cancelledAt: t.cancelledAt,
     liveLat: t.liveLat,
     liveLng: t.liveLng,
     startOdometerKm: t.startOdometerKm,
@@ -89,6 +94,9 @@ function formatTrip(t) {
     endVehiclePhotoUrl: t.endVehiclePhotoUrl || "",
     endProofAt: t.endProofAt,
     createdAt: t.createdAt,
+    gpsKm,
+    odoKm,
+    tripKm,
   };
 }
 
@@ -281,8 +289,7 @@ router.get("/ambulance/trips", verifyAmbulanceDriver, async (req, res) => {
   try {
     const trips = await AmbulanceTrip.find({
       assignedDriver: req.driver._id,
-      tripStatus: { $nin: ["Rejected", "Cancelled"] },
-    }).sort({ createdAt: -1 });
+    }).sort({ createdAt: -1 }).limit(300);
     res.json({ success: true, trips: trips.map(formatTrip) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -448,7 +455,11 @@ router.post("/ambulance/trips/:id/start-proof", verifyAmbulanceDriver, async (re
         message: "Odometer photo and vehicle photo both required",
       });
     }
-    trip.startOdometerKm = odometerKm != null && odometerKm !== "" ? Number(odometerKm) : null;
+    const startKm = odometerKm != null && odometerKm !== "" ? Number(odometerKm) : NaN;
+    if (!Number.isFinite(startKm) || startKm < 0) {
+      return res.status(400).json({ success: false, message: "Start odometer km required" });
+    }
+    trip.startOdometerKm = startKm;
     trip.startOdometerPhotoUrl = odoPath;
     trip.startVehiclePhotoUrl = vehPath;
     if (vehicleNumber) trip.vehicleNumber = String(vehicleNumber).trim().toUpperCase();
@@ -484,7 +495,14 @@ router.post("/ambulance/trips/:id/end-proof", verifyAmbulanceDriver, async (req,
     if (!odoPath) {
       return res.status(400).json({ success: false, message: "End odometer photo required" });
     }
-    trip.endOdometerKm = odometerKm != null && odometerKm !== "" ? Number(odometerKm) : null;
+    const endKm = odometerKm != null && odometerKm !== "" ? Number(odometerKm) : NaN;
+    if (!Number.isFinite(endKm) || endKm < 0) {
+      return res.status(400).json({ success: false, message: "End odometer km required" });
+    }
+    if (trip.startOdometerKm != null && endKm < Number(trip.startOdometerKm)) {
+      return res.status(400).json({ success: false, message: "End odometer cannot be less than start" });
+    }
+    trip.endOdometerKm = endKm;
     trip.endOdometerPhotoUrl = odoPath;
     if (vehiclePhoto) trip.endVehiclePhotoUrl = saveDataUrlImage(vehiclePhoto, "trips") || "";
     trip.endProofAt = new Date();
@@ -533,13 +551,10 @@ router.post("/ambulance/trips/:id/reject", verifyAmbulanceDriver, async (req, re
     }
     trip.tripStatus = "Rejected";
     trip.rejectedReason = String(req.body.reason || "").trim();
-    trip.assignedDriver = null;
-    trip.assignedDriverName = "";
+    trip.cancelledAt = new Date();
     await trip.save();
     await releaseVehicle(trip);
     trip.assignedAmbulance = null;
-    trip.vehicleNumber = "";
-    trip.tripStatus = "Unassigned";
     await trip.save();
     res.json({ success: true, trip: formatTrip(trip) });
   } catch (error) {

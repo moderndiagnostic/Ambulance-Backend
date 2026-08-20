@@ -3,10 +3,12 @@ import { useNavigate } from "react-router-dom";
 import Topbar from "../components/Topbar.jsx";
 import StatCard from "../components/StatCard.jsx";
 import Badge from "../components/Badge.jsx";
+import DateRangeBar from "../components/DateRangeBar.jsx";
+import DonutChart, { RadialGauge } from "../components/DonutChart.jsx";
+import { useDateRange } from "../hooks/useDateRange.js";
 import { ambulanceAdminApi } from "../api.js";
 
-const STATUS_ORDER = [
-  "Unassigned",
+const ACTIVE_STATUSES = [
   "Assigned",
   "Accepted",
   "EnRoutePickup",
@@ -14,9 +16,6 @@ const STATUS_ORDER = [
   "Onboard",
   "EnRouteDrop",
   "ArrivedDrop",
-  "Completed",
-  "Cancelled",
-  "Rejected",
 ];
 
 export default function Dashboard() {
@@ -24,27 +23,51 @@ export default function Dashboard() {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const { preset, range, applyPreset, setCustom } = useDateRange("30d");
 
   useEffect(() => {
     setLoading(true);
+    setError("");
     ambulanceAdminApi
-      .dashboard()
+      .dashboard({ from: range.from, to: range.to })
       .then(setData)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [range]);
 
   const goTrips = (status) => {
     navigate(status ? `/trips?status=${encodeURIComponent(status)}` : "/trips");
   };
 
   const byStatus = data?.byStatus || {};
-  const maxStatus = Math.max(1, ...STATUS_ORDER.map((s) => byStatus[s] || 0));
+  const inProgress = ACTIVE_STATUSES.reduce((n, s) => n + (byStatus[s] || 0), 0);
+  const byType = data?.byType || {};
+
+  const outcomeSegments = [
+    { label: "Completed", value: byStatus.Completed || 0, color: "#0f766e", status: "Completed" },
+    { label: "In progress", value: inProgress, color: "#2563eb", status: "Assigned" },
+    { label: "Unassigned", value: byStatus.Unassigned || 0, color: "#d97706", status: "Unassigned" },
+    { label: "Cancelled", value: byStatus.Cancelled || 0, color: "#64748b", status: "Cancelled" },
+    { label: "Rejected", value: byStatus.Rejected || 0, color: "#e11d48", status: "Rejected" },
+  ];
+
+  const typeSegments = [
+    { label: "BLS", value: byType.BLS || 0, color: "#0369a1" },
+    { label: "ALS", value: byType.ALS || 0, color: "#7c3aed" },
+    { label: "ICU", value: byType.ICU || 0, color: "#be123c" },
+  ];
+
+  const fleetSegments = [
+    { label: "Available", value: data?.fleet?.available || 0, color: "#0f766e" },
+    { label: "On trip", value: data?.fleet?.onTrip || 0, color: "#2563eb" },
+    { label: "Maintenance", value: data?.fleet?.maintenance || 0, color: "#d97706" },
+  ];
 
   return (
     <div>
-      <Topbar title="Dashboard" subtitle="Live overview — trips, fleet, drivers, alerts" />
+      <Topbar title="Dashboard" subtitle="Operations overview — date filter and circular analytics" />
       <div className="p-4 md:p-8 space-y-6">
+        <DateRangeBar preset={preset} range={range} onPreset={applyPreset} onCustom={setCustom} />
         {error ? (
           <div className="rounded-lg bg-rose-50 text-rose-700 text-sm px-4 py-3">{error}</div>
         ) : null}
@@ -74,6 +97,70 @@ export default function Dashboard() {
               />
             </div>
 
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+              <DonutChart
+                title="Trip mix"
+                subtitle="Outcome split for selected dates"
+                segments={outcomeSegments}
+                centerValue={data.totalTrips}
+                centerLabel="Trips"
+                emptyText="No trips in this range"
+                onSegmentClick={(s) => goTrips(s.status)}
+              />
+              <DonutChart
+                title="Ambulance type"
+                subtitle="BLS / ALS / ICU demand"
+                segments={typeSegments}
+                centerLabel="Trips"
+                emptyText="No trips in this range"
+              />
+              <DonutChart
+                title="Fleet status"
+                subtitle="Live vehicle utilization"
+                segments={fleetSegments}
+                centerValue={data.fleet?.total || 0}
+                centerLabel="Vehicles"
+                emptyText="No vehicles"
+                onSegmentClick={() => navigate("/fleet")}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <RadialGauge
+                title="Completion rate"
+                subtitle="Completed vs all trips in range"
+                value={data.completionRate || 0}
+                color="#0f766e"
+                caption={`${data.completed || 0} of ${data.totalTrips || 0} completed`}
+              />
+              <div className="card p-5 lg:col-span-2">
+                <h3 className="text-sm font-semibold text-slate-800 mb-1">Recent trips</h3>
+                <p className="text-xs text-slate-400 mb-3">Latest activity in this date range</p>
+                {(data.recent || []).length === 0 ? (
+                  <p className="text-sm text-slate-400 py-8 text-center">No trips in this range</p>
+                ) : (
+                  <div className="space-y-1">
+                    {(data.recent || []).map((t) => (
+                      <button
+                        key={t.id}
+                        onClick={() => goTrips(t.tripStatus)}
+                        className="w-full flex items-center justify-between rounded-lg px-3 py-2.5 hover:bg-slate-50 text-left"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-slate-800 truncate">{t.patientName}</div>
+                          <div className="text-xs text-slate-400 truncate">
+                            {t.tripId} · {t.assignedDriverName || "Unassigned"}
+                            {t.vehicleNumber ? ` · ${t.vehicleNumber}` : ""}
+                          </div>
+                        </div>
+                        <Badge>{t.tripStatus}</Badge>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <StatCard
                 label="Today's trips"
@@ -87,15 +174,14 @@ export default function Dashboard() {
                 onClick={() => navigate("/drivers")}
               />
               <StatCard
-                label="Fleet available"
-                value={`${data.fleet?.available || 0} / ${data.fleet?.total || 0}`}
-                hint={data.fleet?.onTrip ? `${data.fleet.onTrip} on trip` : undefined}
-                onClick={() => navigate("/fleet")}
-              />
-              <StatCard
                 label="Live on map"
                 value={data.drivers?.liveGps || 0}
                 onClick={() => navigate("/live-map")}
+              />
+              <StatCard
+                label="GPS km (range)"
+                value={data.gpsKmRange ?? data.gpsKmToday}
+                onClick={() => navigate("/kms")}
               />
             </div>
 
@@ -119,63 +205,11 @@ export default function Dashboard() {
                 onClick={() => navigate("/check-ins")}
               />
               <StatCard
-                label="GPS km today"
-                value={data.gpsKmToday}
-                onClick={() => navigate("/kms")}
+                label="Fleet available"
+                value={`${data.fleet?.available || 0} / ${data.fleet?.total || 0}`}
+                hint={data.fleet?.onTrip ? `${data.fleet.onTrip} on trip` : undefined}
+                onClick={() => navigate("/fleet")}
               />
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="card p-5">
-                <h3 className="text-sm font-semibold text-slate-700 mb-4">Trips by status</h3>
-                <div className="space-y-3">
-                  {STATUS_ORDER.every((s) => !byStatus[s]) ? (
-                    <p className="text-sm text-slate-400">No trips yet</p>
-                  ) : (
-                    STATUS_ORDER.filter((s) => byStatus[s]).map((s) => (
-                      <button key={s} onClick={() => goTrips(s)} className="w-full text-left group">
-                        <div className="flex justify-between text-xs text-slate-500 mb-1">
-                          <span className="font-medium text-slate-700 group-hover:text-brand-600">{s}</span>
-                          <span>{byStatus[s]}</span>
-                        </div>
-                        <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-brand-500 group-hover:bg-brand-600"
-                            style={{ width: `${((byStatus[s] || 0) / maxStatus) * 100}%` }}
-                          />
-                        </div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              <div className="card p-5">
-                <h3 className="text-sm font-semibold text-slate-700 mb-4">Recent trips</h3>
-                {(data.recent || []).length === 0 ? (
-                  <p className="text-sm text-slate-400">No trips yet</p>
-                ) : (
-                  <div className="space-y-2">
-                    {(data.recent || []).map((t) => (
-                      <button
-                        key={t.id}
-                        onClick={() => goTrips(t.tripStatus)}
-                        className="w-full flex items-center justify-between rounded-lg px-3 py-2 hover:bg-slate-50 text-left"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium text-slate-800 truncate">
-                            {t.patientName}
-                          </div>
-                          <div className="text-xs text-slate-400 truncate">
-                            {t.tripId} · {t.assignedDriverName || "Unassigned"}
-                          </div>
-                        </div>
-                        <Badge>{t.tripStatus}</Badge>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
             </div>
           </>
         ) : null}

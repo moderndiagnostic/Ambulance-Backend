@@ -134,5 +134,8 @@ export const ambulanceAdminApi = {
     const q = qs(params);
     return request(`/admin/daily-sheet${q ? `?${q}` : ""}`);
   },
-  dashboard: () => request("/admin/dashboard"),
+  dashboard: (params = {}) => {
+    const q = qs(params);
+    return request(`/admin/dashboard${q ? `?${q}` : ""}`);
+  },
 };
