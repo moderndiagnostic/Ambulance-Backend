@@ -350,7 +350,15 @@ router.get("/admin/ambulance-trips", ...adminOnly, async (req, res) => {
   try {
     const filter = { ...cityFilter(req.user) };
     if (req.query.status) filter.tripStatus = String(req.query.status);
-    const trips = await AmbulanceTrip.find(filter).select("-path").sort({ createdAt: -1 }).limit(200);
+    const range = createdAtFilter(req.query);
+    if (range) {
+      filter.$or = [
+        { createdAt: { $gte: range.start, $lt: range.end } },
+        { assignedAt: { $gte: range.start, $lt: range.end } },
+        { completedAt: { $gte: range.start, $lt: range.end } },
+      ];
+    }
+    const trips = await AmbulanceTrip.find(filter).select("-path").sort({ createdAt: -1 }).limit(400);
     res.json({ success: true, trips: trips.map((t) => formatTrip(t)) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

@@ -4,6 +4,8 @@ import Topbar from "../components/Topbar.jsx";
 import Badge from "../components/Badge.jsx";
 import Modal from "../components/Modal.jsx";
 import TripReplayMap from "../components/TripReplayMap.jsx";
+import DateRangeBar from "../components/DateRangeBar.jsx";
+import { useDateRange } from "../hooks/useDateRange.js";
 import { ambulanceAdminApi, mediaUrl } from "../api.js";
 
 const empty = {
@@ -83,19 +85,28 @@ export default function Trips() {
   const [editForm, setEditForm] = useState(empty);
   const [statusFilter, setStatusFilter] = useState(searchParams.get("status") || "");
   const [assignForm, setAssignForm] = useState({ driverId: "", ambulanceId: "" });
+  const { preset, range, applyPreset, setCustom } = useDateRange("30d");
+
+  async function loadLookups() {
+    try {
+      const [d, a] = await Promise.all([ambulanceAdminApi.drivers(), ambulanceAdminApi.ambulances()]);
+      setDrivers(d.drivers || []);
+      setAmbulances(a.ambulances || []);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
 
   async function load() {
     setLoading(true);
     setError("");
     try {
-      const [t, d, a] = await Promise.all([
-        ambulanceAdminApi.trips(statusFilter ? { status: statusFilter } : {}),
-        ambulanceAdminApi.drivers(),
-        ambulanceAdminApi.ambulances(),
-      ]);
+      const params = {};
+      if (statusFilter) params.status = statusFilter;
+      if (range.from) params.from = range.from;
+      if (range.to) params.to = range.to;
+      const t = await ambulanceAdminApi.trips(params);
       setTrips(t.trips || []);
-      setDrivers(d.drivers || []);
-      setAmbulances(a.ambulances || []);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -108,8 +119,12 @@ export default function Trips() {
   }, [searchParams]);
 
   useEffect(() => {
+    loadLookups();
+  }, []);
+
+  useEffect(() => {
     load();
-  }, [statusFilter]);
+  }, [statusFilter, range]);
 
   async function submitAdd(e) {
     e.preventDefault();
@@ -195,32 +210,38 @@ export default function Trips() {
   return (
     <div>
       <Topbar title="Trips" subtitle="Create request → assign driver + vehicle" />
-      <div className="p-4 md:p-8">
-        <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
-          <div className="flex items-center gap-3">
-            <p className="text-sm text-slate-500">{trips.length} trips</p>
-            <select
-              className="input w-44"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-            >
-              <option value="">All statuses</option>
-              <option>Unassigned</option>
-              <option>Assigned</option>
-              <option>Accepted</option>
-              <option>EnRoutePickup</option>
-              <option>ArrivedPickup</option>
-              <option>Onboard</option>
-              <option>EnRouteDrop</option>
-              <option>ArrivedDrop</option>
-              <option>Completed</option>
-              <option>Cancelled</option>
-            </select>
-          </div>
-          <button className="btn-primary" onClick={() => { setForm(empty); setFormError(""); setShowAdd(true); }}>
-            New trip
-          </button>
-        </div>
+      <div className="p-4 md:p-8 space-y-4">
+        <DateRangeBar
+          preset={preset}
+          range={range}
+          onPreset={applyPreset}
+          onCustom={setCustom}
+          trailing={
+            <>
+              <select
+                className="input w-44"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+              >
+                <option value="">All statuses</option>
+                <option>Unassigned</option>
+                <option>Assigned</option>
+                <option>Accepted</option>
+                <option>EnRoutePickup</option>
+                <option>ArrivedPickup</option>
+                <option>Onboard</option>
+                <option>EnRouteDrop</option>
+                <option>ArrivedDrop</option>
+                <option>Completed</option>
+                <option>Cancelled</option>
+              </select>
+              <button className="btn-primary" onClick={() => { setForm(empty); setFormError(""); setShowAdd(true); }}>
+                New trip
+              </button>
+            </>
+          }
+        />
+        <p className="text-sm text-slate-500">{trips.length} trips in this range</p>
         {error ? <p className="text-rose-600 text-sm mb-3">{error}</p> : null}
         <div className="card overflow-hidden">
           <div className="overflow-x-auto">
