@@ -387,9 +387,9 @@ export default function Trips() {
             <label className="label">Lab/ drop</label>
             <input
               className="input"
-              placeholder="Hospital name"
-              value={form.hospitalName}
-              onChange={(e) => setForm({ ...form, hospitalName: e.target.value })}
+              placeholder="Lab name"
+              value={form.LabName}
+              onChange={(e) => setForm({ ...form, LabName: e.target.value })}
             />
             <input
               required
