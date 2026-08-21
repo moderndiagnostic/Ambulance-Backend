@@ -11,7 +11,7 @@ const empty = {
   mobileNumber: "",
   pickupAddress: "",
   dropAddress: "",
-  hospitalName: "",
+  LabName: "",
   requestedType: "BLS",
   notes: "",
   driverId: "",
@@ -384,7 +384,7 @@ export default function Trips() {
             />
           </div>
           <div>
-            <label className="label">Hospital / drop</label>
+            <label className="label">Lab/ drop</label>
             <input
               className="input"
               placeholder="Hospital name"

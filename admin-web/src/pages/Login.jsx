@@ -38,10 +38,10 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-brand-900 to-slate-900 px-4">
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-6">
-          <div className="h-12 w-12 rounded-xl bg-brand-500 flex items-center justify-center text-white text-xl font-bold shadow-card">
-            A
+          <div className="h-10 w-10 rounded-xl bg-brand-500 flex items-center justify-center text-white text-sm font-bold shadow-card">
+            M
           </div>
-          <h1 className="mt-3 text-white text-xl font-semibold">Ambulance Ops</h1>
+          <h1 className="mt-3 text-white text-xl font-semibold">MDRC Ambulance Ops</h1>
           <p className="text-slate-400 text-sm">Dashboard, trips, fleet and live map</p>
         </div>
 

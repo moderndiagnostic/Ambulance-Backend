@@ -38,26 +38,28 @@ export default function Sidebar() {
           ${mobileOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0
           ${collapsed ? "md:w-[76px]" : "md:w-60"} w-64`}
       >
-        <div className={`px-4 py-5 flex items-center gap-2.5 ${collapsed ? "md:flex-col md:gap-2 md:px-2" : ""}`}>
+        <div className={`px-4 py-4 flex items-center gap-2.5 ${collapsed ? "md:flex-col md:gap-2 md:px-2" : ""}`}>
           <button
             type="button"
             onClick={toggleCollapsed}
-            className="hidden md:flex h-9 w-9 rounded-xl items-center justify-center text-white font-bold shrink-0 bg-brand-500"
+            className="hidden md:flex h-8 w-8 rounded-lg items-center justify-center text-white text-xs font-bold shrink-0 bg-brand-500 hover:bg-brand-600"
+            aria-label={collapsed ? "Expand menu" : "Collapse menu"}
+            title={collapsed ? "Open menu" : "Close menu"}
           >
-            A
+            M
           </button>
-          <div className="md:hidden h-9 w-9 rounded-xl flex items-center justify-center text-white font-bold bg-brand-500">
-            A
+          <div className="md:hidden h-8 w-8 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0 bg-brand-500">
+            M
           </div>
-          <div className={collapsed ? "md:hidden" : "min-w-0 flex-1"}>
-            <div className="font-semibold leading-none truncate text-white">Ambulance Ops</div>
+          <div className={collapsed ? "md:hidden min-w-0 flex-1" : "min-w-0 flex-1"}>
+            <div className="font-semibold leading-none truncate text-white">MDRC</div>
             <div className="text-[11px] mt-0.5 truncate text-slate-500">
-              {roleLabel} · {user?.city || "—"}
+              Ambulance · {roleLabel} · {user?.city || "—"}
             </div>
           </div>
           <button
             onClick={() => setMobileOpen(false)}
-            className="ml-auto md:hidden h-8 w-8 rounded-lg text-slate-400"
+            className="ml-auto md:hidden h-8 w-8 rounded-lg text-slate-400 hover:bg-white/5"
           >
             ✕
           </button>
@@ -85,7 +87,7 @@ export default function Sidebar() {
           ))}
         </nav>
         <div className={`px-5 py-4 text-[11px] border-t border-white/5 text-slate-600 ${collapsed ? "md:hidden" : ""}`}>
-          Separate from Phlebo admin
+          MDRC · Ambulance Ops
         </div>
       </aside>
     </>
