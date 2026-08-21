@@ -209,7 +209,7 @@ export default function Trips() {
 
   return (
     <div>
-      <Topbar title="Trips" subtitle="Create request → assign driver + vehicle" />
+      <Topbar title="Trips" subtitle="View driver trips — create and assign only from the driver app" />
       <div className="p-4 md:p-8 space-y-4">
         <DateRangeBar
           preset={preset}
@@ -235,9 +235,6 @@ export default function Trips() {
                 <option>Completed</option>
                 <option>Cancelled</option>
               </select>
-              <button className="btn-primary" onClick={() => { setForm(empty); setFormError(""); setShowAdd(true); }}>
-                New trip
-              </button>
             </>
           }
         />
@@ -343,27 +340,12 @@ export default function Trips() {
                           Edit
                         </button>
                         {!["Completed", "Cancelled"].includes(t.tripStatus) ? (
-                          <>
-                            <button
-                              className="text-xs font-medium text-brand-600 mr-3"
-                              onClick={() => {
-                                setAssigning(t);
-                                setAssignForm({
-                                  driverId: t.assignedDriver || "",
-                                  ambulanceId: t.assignedAmbulance || "",
-                                });
-                                setFormError("");
-                              }}
-                            >
-                              Assign
-                            </button>
                             <button
                               className="text-xs font-medium text-rose-600"
                               onClick={() => cancelTrip(t)}
                             >
                               Cancel
                             </button>
-                          </>
                         ) : null}
                       </td>
                     </tr>
@@ -374,109 +356,6 @@ export default function Trips() {
           </div>
         </div>
       </div>
-
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="New trip" width="max-w-lg">
-        <form onSubmit={submitAdd} className="space-y-3">
-          {formError ? <p className="text-rose-600 text-sm">{formError}</p> : null}
-          <div>
-            <label className="label">Patient name</label>
-            <input
-              required
-              className="input"
-              value={form.patientName}
-              onChange={(e) => setForm({ ...form, patientName: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="label">Mobile</label>
-            <input
-              className="input"
-              value={form.mobileNumber}
-              onChange={(e) => setForm({ ...form, mobileNumber: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="label">Pickup address</label>
-            <input
-              required
-              className="input"
-              value={form.pickupAddress}
-              onChange={(e) => setForm({ ...form, pickupAddress: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="label">Lab/ drop</label>
-            <input
-              className="input"
-              placeholder="Lab name"
-              value={form.LabName}
-              onChange={(e) => setForm({ ...form, LabName: e.target.value })}
-            />
-            <input
-              required
-              className="input mt-2"
-              placeholder="Drop address"
-              value={form.dropAddress}
-              onChange={(e) => setForm({ ...form, dropAddress: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="label">Type</label>
-            <select
-              className="input"
-              value={form.requestedType}
-              onChange={(e) => setForm({ ...form, requestedType: e.target.value })}
-            >
-              <option>BLS</option>
-              <option>ALS</option>
-              <option>ICU</option>
-            </select>
-          </div>
-          <div>
-            <label className="label">Notes</label>
-            <input
-              className="input"
-              value={form.notes}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="label">Assigned driver</label>
-            <select
-              className="input"
-              value={form.driverId}
-              onChange={(e) => setForm({ ...form, driverId: e.target.value })}
-            >
-              <option value="">Assign later</option>
-              {drivers
-                .filter((d) => d.status === "active")
-                .map((d) => (
-                  <option key={d._id || d.id} value={d._id || d.id}>
-                    {d.name} · {d.employeeId} · {d.dutyStatus}
-                  </option>
-                ))}
-            </select>
-          </div>
-          <div>
-            <label className="label">Vehicle</label>
-            <select
-              className="input"
-              value={form.ambulanceId}
-              onChange={(e) => setForm({ ...form, ambulanceId: e.target.value })}
-            >
-              <option value="">Assign later</option>
-              {newTripVehicles.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.vehicleNumber} · {a.type} · {a.status}
-                </option>
-              ))}
-            </select>
-          </div>
-          <button className="btn-primary w-full" disabled={saving}>
-            {saving ? "Saving…" : form.driverId && form.ambulanceId ? "Create & assign" : "Create trip"}
-          </button>
-        </form>
-      </Modal>
 
       <Modal open={!!editing} onClose={() => setEditing(null)} title={`Edit ${editing?.tripId || "trip"}`} width="max-w-lg">
         <form onSubmit={submitEdit} className="space-y-3">
@@ -550,65 +429,12 @@ export default function Trips() {
         </form>
       </Modal>
 
-      <Modal open={!!assigning} onClose={() => setAssigning(null)} title="Assign driver & vehicle">
-        <form onSubmit={submitAssign} className="space-y-3">
-          {formError ? <p className="text-rose-600 text-sm">{formError}</p> : null}
-          <div>
-            <label className="label">Driver</label>
-            <select
-              required
-              className="input"
-              value={assignForm.driverId}
-              onChange={(e) => setAssignForm({ ...assignForm, driverId: e.target.value })}
-            >
-              <option value="">Select driver</option>
-              {drivers
-                .filter((d) => d.status === "active")
-                .map((d) => (
-                  <option key={d._id || d.id} value={d._id || d.id}>
-                    {d.name} · {d.employeeId} · {d.dutyStatus}
-                  </option>
-                ))}
-            </select>
-          </div>
-          <div>
-            <label className="label">Ambulance</label>
-            <select
-              required
-              className="input"
-              value={assignForm.ambulanceId}
-              onChange={(e) => setAssignForm({ ...assignForm, ambulanceId: e.target.value })}
-            >
-              <option value="">Select vehicle</option>
-              {freeAmbulances.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.vehicleNumber} · {a.type} · {a.status}
-                </option>
-              ))}
-            </select>
-          </div>
-          <button className="btn-primary w-full" disabled={saving}>
-            {saving ? "Assigning…" : "Assign"}
-          </button>
-        </form>
-      </Modal>
-
       <Modal open={!!viewing} onClose={() => setViewing(null)} title={viewing?.tripId || "Trip"} width="max-w-4xl">
         {viewing ? (
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2 items-center">
               <Badge>{viewing.tripStatus}</Badge>
-              <ProofFlag ok={!!viewing.startOdometerPhotoUrl} label="Start odometer" />
-              <ProofFlag ok={!!viewing.startVehiclePhotoUrl} label="Start vehicle" />
-              <ProofFlag ok={!!viewing.endOdometerPhotoUrl} label="End odometer" />
             </div>
-
-            {viewing.kmMismatch ? (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                KM mismatch: GPS {viewing.gpsKm} km vs odometer {viewing.odoKm} km (
-                {viewing.kmMismatchPct}% farak, 20%+ alert)
-              </div>
-            ) : null}
 
             <TripReplayMap trip={viewing} />
 
@@ -654,30 +480,6 @@ export default function Trips() {
               <Row k="En route hospital" v={fmt(viewing.enRouteDropAt)} />
               <Row k="Arrived hospital" v={fmt(viewing.arrivedDropAt)} />
               <Row k="Completed" v={fmt(viewing.completedAt)} />
-            </div>
-
-            <div>
-              <div className="text-xs font-semibold text-slate-400 uppercase mb-2">Start proof</div>
-              <Row k="Start odometer km" v={viewing.startOdometerKm != null ? String(viewing.startOdometerKm) : ""} />
-              <Row k="Start photos at" v={fmt(viewing.startProofAt)} />
-              <div className="grid grid-cols-2 gap-3 mt-2">
-                <PhotoCell url={viewing.startOdometerPhotoUrl} caption="Odometer (start)" />
-                <PhotoCell url={viewing.startVehiclePhotoUrl} caption="Vehicle (start)" />
-              </div>
-            </div>
-
-            <div>
-              <div className="text-xs font-semibold text-slate-400 uppercase mb-2">End proof</div>
-              <Row k="End odometer km" v={viewing.endOdometerKm != null ? String(viewing.endOdometerKm) : ""} />
-              <Row k="GPS km" v={viewing.gpsKm != null ? String(viewing.gpsKm) : ""} />
-              <Row
-                k="Trip km (odo)"
-                v={viewing.odoKm != null ? String(viewing.odoKm) : ""}
-              />
-              <div className="grid grid-cols-2 gap-3 mt-2">
-                <PhotoCell url={viewing.endOdometerPhotoUrl} caption="Odometer (end)" />
-                <PhotoCell url={viewing.endVehiclePhotoUrl} caption="Vehicle (end)" />
-              </div>
             </div>
           </div>
         ) : null}

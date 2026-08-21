@@ -25,6 +25,8 @@ const ambulanceShiftSchema = new mongoose.Schema(
     checkInLat: { type: Number, default: null },
     checkInLng: { type: Number, default: null },
     odometerStart: { type: Number, default: null },
+    checkInOdometerPhotoUrl: { type: String, default: "" },
+    checkInVehiclePhotoUrl: { type: String, default: "" },
     condition: {
       fuelLevel: { type: String, enum: ["full", "half", "low", ""], default: "" },
       tiresOk: { type: Boolean, default: true },
@@ -39,6 +41,7 @@ const ambulanceShiftSchema = new mongoose.Schema(
     checkOutLat: { type: Number, default: null },
     checkOutLng: { type: Number, default: null },
     odometerEnd: { type: Number, default: null },
+    checkOutOdometerPhotoUrl: { type: String, default: "" },
     gpsKm: { type: Number, default: 0 },
     legs: [
       {

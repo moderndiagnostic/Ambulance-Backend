@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import Topbar from "../components/Topbar.jsx";
-import { ambulanceAdminApi } from "../api.js";
+import { ambulanceAdminApi, mediaUrl } from "../api.js";
 
 function fmtTime(d) {
   if (!d) return "—";
@@ -94,6 +94,11 @@ export default function Shifts() {
                         {s.odometerStart != null ? ` · odo start ${s.odometerStart}` : ""}
                         {s.odometerEnd != null ? ` · end ${s.odometerEnd}` : ""}
                       </div>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        <ShiftPhoto url={s.checkInOdometerPhotoUrl} label="Check-in odo" />
+                        <ShiftPhoto url={s.checkInVehiclePhotoUrl} label="Check-in vehicle" />
+                        <ShiftPhoto url={s.checkOutOdometerPhotoUrl} label="Check-out odo" />
+                      </div>
                     </div>
                     <button
                       className="text-xs font-medium text-brand-600"
@@ -127,5 +132,22 @@ export default function Shifts() {
         )}
       </div>
     </div>
+  );
+}
+
+function ShiftPhoto({ url, label }) {
+  const href = mediaUrl(url);
+  if (!href) {
+    return (
+      <span className="text-[11px] text-slate-400 border border-dashed border-slate-200 rounded px-2 py-1">
+        {label}: —
+      </span>
+    );
+  }
+  return (
+    <a href={href} target="_blank" rel="noreferrer" className="block">
+      <img src={href} alt={label} className="h-20 w-28 object-cover rounded border border-slate-100" />
+      <div className="text-[11px] text-slate-500 mt-0.5">{label}</div>
+    </a>
   );
 }

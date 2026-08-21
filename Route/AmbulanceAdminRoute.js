@@ -137,24 +137,8 @@ function formatDriver(d) {
   return obj;
 }
 
-function photosMissing(t) {
-  const missing = [];
-  const afterStart = [
-    "EnRoutePickup",
-    "ArrivedPickup",
-    "Onboard",
-    "EnRouteDrop",
-    "ArrivedDrop",
-    "Completed",
-  ].includes(t.tripStatus);
-  if (afterStart || t.startProofAt) {
-    if (!t.startOdometerPhotoUrl) missing.push("start_odometer");
-    if (!t.startVehiclePhotoUrl) missing.push("start_vehicle");
-  }
-  if (t.tripStatus === "Completed" || t.endProofAt) {
-    if (!t.endOdometerPhotoUrl) missing.push("end_odometer");
-  }
-  return missing;
+function photosMissing() {
+  return [];
 }
 
 function formatTrip(t, { includePath = false } = {}) {
@@ -406,81 +390,17 @@ router.put("/admin/ambulance-trips/:id", ...adminOnly, async (req, res) => {
 });
 
 router.post("/admin/ambulance-trips", ...adminOnly, async (req, res) => {
-  try {
-    const {
-      patientName,
-      mobileNumber,
-      pickupAddress,
-      dropAddress,
-      hospitalName,
-      pincode,
-      requestedType,
-      notes,
-      pickupLat,
-      pickupLng,
-      dropLat,
-      dropLng,
-      driverId,
-      ambulanceId,
-    } = req.body || {};
-    if (!patientName || !pickupAddress || !dropAddress) {
-      return res.status(400).json({
-        success: false,
-        message: "Patient name, pickup and drop address required",
-      });
-    }
-    if ((driverId && !ambulanceId) || (!driverId && ambulanceId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Assign both driver and vehicle, or leave both empty",
-      });
-    }
-    let trip = await AmbulanceTrip.create({
-      tripId: await generateAmbulanceTripId(),
-      patientName: String(patientName).trim(),
-      mobileNumber: mobileNumber ? String(mobileNumber).trim() : "",
-      pickupAddress: String(pickupAddress).trim(),
-      dropAddress: String(dropAddress).trim(),
-      hospitalName: hospitalName ? String(hospitalName).trim() : "",
-      city: resolvedCity(req.user, req.body.city),
-      pincode: pincode ? String(pincode).trim() : "",
-      requestedType: ["BLS", "ALS", "ICU"].includes(requestedType) ? requestedType : "BLS",
-      notes: notes ? String(notes).trim() : "",
-      pickupLat: typeof pickupLat === "number" ? pickupLat : null,
-      pickupLng: typeof pickupLng === "number" ? pickupLng : null,
-      dropLat: typeof dropLat === "number" ? dropLat : null,
-      dropLng: typeof dropLng === "number" ? dropLng : null,
-    });
-    if (driverId && ambulanceId) {
-      const assigned = await applyAssignment(req.user, trip, driverId, ambulanceId);
-      if (assigned.error) {
-        return res.status(assigned.error.status).json({
-          success: false,
-          message: assigned.error.message,
-          trip: formatTrip(trip),
-        });
-      }
-      trip = assigned.trip;
-    }
-    res.status(201).json({ success: true, trip: formatTrip(trip) });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  return res.status(403).json({
+    success: false,
+    message: "Drivers create trips from the app. Admin can only view.",
+  });
 });
 
-router.put("/admin/ambulance-trips/:id/assign", ...adminOnly, async (req, res) => {
-  try {
-    const trip = await AmbulanceTrip.findOne({ _id: req.params.id, ...cityFilter(req.user) });
-    if (!trip) return res.status(404).json({ success: false, message: "Trip not found" });
-    const { driverId, ambulanceId } = req.body || {};
-    const assigned = await applyAssignment(req.user, trip, driverId, ambulanceId);
-    if (assigned.error) {
-      return res.status(assigned.error.status).json({ success: false, message: assigned.error.message });
-    }
-    res.json({ success: true, trip: formatTrip(assigned.trip) });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+router.put("/admin/ambulance-trips/:id/assign", ...adminOnly, async (_req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: "Drivers assign trips from the app. Admin can only view.",
+  });
 });
 
 router.put("/admin/ambulance-trips/:id/cancel", ...adminOnly, async (req, res) => {
@@ -515,6 +435,9 @@ function formatShiftAdmin(s) {
     checkOutAt: s.checkOutAt,
     odometerStart: s.odometerStart,
     odometerEnd: s.odometerEnd,
+    checkInOdometerPhotoUrl: s.checkInOdometerPhotoUrl || "",
+    checkInVehiclePhotoUrl: s.checkInVehiclePhotoUrl || "",
+    checkOutOdometerPhotoUrl: s.checkOutOdometerPhotoUrl || "",
     gpsKm: s.gpsKm || 0,
     condition: s.condition || {},
     legs: s.legs || [],
