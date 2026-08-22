@@ -96,9 +96,13 @@ export default function Shifts() {
                       </div>
                       <div className="flex flex-wrap gap-2 mt-2">
                         <ShiftPhoto url={s.checkInOdometerPhotoUrl} label="Check-in odo" />
-                        <ShiftPhoto url={s.checkInVehiclePhotoUrl} label="Check-in vehicle" />
+                        {(s.checkInVehiclePhotoUrls || [s.checkInVehiclePhotoUrl].filter(Boolean)).map((url, i) => (
+                          <ShiftPhoto key={`in-v-${i}`} url={url} label={`Check-in vehicle ${i + 1}`} />
+                        ))}
                         <ShiftPhoto url={s.checkOutOdometerPhotoUrl} label="Check-out odo" />
-                        <ShiftPhoto url={s.checkOutVehiclePhotoUrl} label="Check-out vehicle" />
+                        {(s.checkOutVehiclePhotoUrls || [s.checkOutVehiclePhotoUrl].filter(Boolean)).map((url, i) => (
+                          <ShiftPhoto key={`out-v-${i}`} url={url} label={`Check-out vehicle ${i + 1}`} />
+                        ))}
                       </div>
                     </div>
                     <button

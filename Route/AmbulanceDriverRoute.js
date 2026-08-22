@@ -8,6 +8,23 @@ const { haversineKm, ymd, appendTripPath, odoTripKm } = require("../services/geo
 const { generateAmbulanceTripId } = require("../services/ambulanceTripId");
 const { saveDataUrlImage } = require("../services/media");
 
+const MAX_VEHICLE_PHOTOS = 8;
+
+function saveVehiclePhotoList(body, folder) {
+  const raw = [];
+  if (Array.isArray(body?.vehiclePhotos) && body.vehiclePhotos.length) {
+    raw.push(...body.vehiclePhotos);
+  } else if (body?.vehiclePhoto) {
+    raw.push(body.vehiclePhoto);
+  }
+  const out = [];
+  for (const item of raw.slice(0, MAX_VEHICLE_PHOTOS)) {
+    const p = saveDataUrlImage(item, folder);
+    if (p) out.push(p);
+  }
+  return out;
+}
+
 const MAX_REALISTIC_PING_KM = 3;
 
 const NEXT_STATUS = {
@@ -705,9 +722,19 @@ function formatShift(s) {
     odometerStart: s.odometerStart,
     odometerEnd: s.odometerEnd,
     checkInOdometerPhotoUrl: s.checkInOdometerPhotoUrl || "",
-    checkInVehiclePhotoUrl: s.checkInVehiclePhotoUrl || "",
+    checkInVehiclePhotoUrl: s.checkInVehiclePhotoUrl || (s.checkInVehiclePhotoUrls || [])[0] || "",
+    checkInVehiclePhotoUrls: (s.checkInVehiclePhotoUrls || []).length
+      ? s.checkInVehiclePhotoUrls
+      : s.checkInVehiclePhotoUrl
+        ? [s.checkInVehiclePhotoUrl]
+        : [],
     checkOutOdometerPhotoUrl: s.checkOutOdometerPhotoUrl || "",
-    checkOutVehiclePhotoUrl: s.checkOutVehiclePhotoUrl || "",
+    checkOutVehiclePhotoUrl: s.checkOutVehiclePhotoUrl || (s.checkOutVehiclePhotoUrls || [])[0] || "",
+    checkOutVehiclePhotoUrls: (s.checkOutVehiclePhotoUrls || []).length
+      ? s.checkOutVehiclePhotoUrls
+      : s.checkOutVehiclePhotoUrl
+        ? [s.checkOutVehiclePhotoUrl]
+        : [],
     gpsKm: s.gpsKm || 0,
     condition: s.condition || {},
     legs: s.legs || [],
@@ -767,7 +794,7 @@ router.post("/ambulance/shift/check-in", verifyAmbulanceDriver, async (req, res)
     if (open) {
       return res.status(400).json({ success: false, message: "Already checked in today" });
     }
-    const { ambulanceId, odometerStart, odometerPhoto, vehiclePhoto, lat, lng, condition } = req.body || {};
+    const { ambulanceId, odometerStart, odometerPhoto, lat, lng, condition } = req.body || {};
     if (!ambulanceId) {
       return res.status(400).json({ success: false, message: "Select a vehicle" });
     }
@@ -776,8 +803,8 @@ router.post("/ambulance/shift/check-in", verifyAmbulanceDriver, async (req, res)
       return res.status(400).json({ success: false, message: "Start odometer km required" });
     }
     const odoPath = saveDataUrlImage(odometerPhoto, "shifts");
-    const vehPath = saveDataUrlImage(vehiclePhoto, "shifts");
-    if (!odoPath || !vehPath) {
+    const vehPaths = saveVehiclePhotoList(req.body, "shifts");
+    if (!odoPath || !vehPaths.length) {
       return res.status(400).json({
         success: false,
         message: "Odometer photo and vehicle photo required at check-in",
@@ -812,7 +839,8 @@ router.post("/ambulance/shift/check-in", verifyAmbulanceDriver, async (req, res)
       checkInLng: typeof lng === "number" ? lng : null,
       odometerStart: startKm,
       checkInOdometerPhotoUrl: odoPath,
-      checkInVehiclePhotoUrl: vehPath,
+      checkInVehiclePhotoUrl: vehPaths[0],
+      checkInVehiclePhotoUrls: vehPaths,
       condition: {
         fuelLevel: ["full", "half", "low"].includes(cond.fuelLevel) ? cond.fuelLevel : "",
         tiresOk: cond.tiresOk !== false,
@@ -863,7 +891,7 @@ router.post("/ambulance/shift/check-out", verifyAmbulanceDriver, async (req, res
     if (!shift) {
       return res.status(400).json({ success: false, message: "No open check-in today" });
     }
-    const { lat, lng, odometerEnd, odometerPhoto, vehiclePhoto } = req.body || {};
+    const { lat, lng, odometerEnd, odometerPhoto } = req.body || {};
     const endKm = odometerEnd != null && odometerEnd !== "" ? Number(odometerEnd) : NaN;
     if (!Number.isFinite(endKm) || endKm <= 0) {
       return res.status(400).json({ success: false, message: "End odometer km required" });
@@ -872,8 +900,8 @@ router.post("/ambulance/shift/check-out", verifyAmbulanceDriver, async (req, res
       return res.status(400).json({ success: false, message: "End odometer cannot be less than start" });
     }
     const odoPath = saveDataUrlImage(odometerPhoto, "shifts");
-    const vehPath = saveDataUrlImage(vehiclePhoto, "shifts");
-    if (!odoPath || !vehPath) {
+    const vehPaths = saveVehiclePhotoList(req.body, "shifts");
+    if (!odoPath || !vehPaths.length) {
       return res.status(400).json({
         success: false,
         message: "Odometer photo and vehicle photo required at check-out",
@@ -884,7 +912,8 @@ router.post("/ambulance/shift/check-out", verifyAmbulanceDriver, async (req, res
     shift.checkOutLng = typeof lng === "number" ? lng : null;
     shift.odometerEnd = endKm;
     shift.checkOutOdometerPhotoUrl = odoPath;
-    shift.checkOutVehiclePhotoUrl = vehPath;
+    shift.checkOutVehiclePhotoUrl = vehPaths[0];
+    shift.checkOutVehiclePhotoUrls = vehPaths;
     shift.legs.push({
       type: "check_out",
       label: "Day end",

@@ -436,9 +436,19 @@ function formatShiftAdmin(s) {
     odometerStart: s.odometerStart,
     odometerEnd: s.odometerEnd,
     checkInOdometerPhotoUrl: s.checkInOdometerPhotoUrl || "",
-    checkInVehiclePhotoUrl: s.checkInVehiclePhotoUrl || "",
+    checkInVehiclePhotoUrl: s.checkInVehiclePhotoUrl || (s.checkInVehiclePhotoUrls || [])[0] || "",
+    checkInVehiclePhotoUrls: (s.checkInVehiclePhotoUrls || []).length
+      ? s.checkInVehiclePhotoUrls
+      : s.checkInVehiclePhotoUrl
+        ? [s.checkInVehiclePhotoUrl]
+        : [],
     checkOutOdometerPhotoUrl: s.checkOutOdometerPhotoUrl || "",
-    checkOutVehiclePhotoUrl: s.checkOutVehiclePhotoUrl || "",
+    checkOutVehiclePhotoUrl: s.checkOutVehiclePhotoUrl || (s.checkOutVehiclePhotoUrls || [])[0] || "",
+    checkOutVehiclePhotoUrls: (s.checkOutVehiclePhotoUrls || []).length
+      ? s.checkOutVehiclePhotoUrls
+      : s.checkOutVehiclePhotoUrl
+        ? [s.checkOutVehiclePhotoUrl]
+        : [],
     gpsKm: s.gpsKm || 0,
     condition: s.condition || {},
     legs: s.legs || [],
