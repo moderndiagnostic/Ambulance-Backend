@@ -4,7 +4,7 @@ const Ambulance = require("../Models/Ambulance");
 const AmbulanceTrip = require("../Models/AmbulanceTrip");
 const AmbulanceShift = require("../Models/AmbulanceShift");
 const { verifyAmbulanceDriver } = require("./ambulanceAuthMiddleware");
-const { haversineKm, ymd, appendTripPath, odoTripKm } = require("../services/geo");
+const { haversineKm, ymd, dayRange, appendTripPath, odoTripKm } = require("../services/geo");
 const { generateAmbulanceTripId } = require("../services/ambulanceTripId");
 const { saveDataUrlImage } = require("../services/media");
 
@@ -140,19 +140,25 @@ async function requireReadyShift(req, res) {
     });
     return null;
   }
-  const busy = await AmbulanceTrip.findOne({
+  return shift;
+}
+
+async function assertOneTripToday(req, res) {
+  const { start, end } = dayRange(ymd());
+  const existing = await AmbulanceTrip.findOne({
     assignedDriver: req.driver._id,
-    tripStatus: { $in: OPEN_STATUSES },
-  });
-  if (busy) {
+    createdAt: { $gte: start, $lt: end },
+    tripStatus: { $nin: ["Cancelled", "Rejected"] },
+  }).select("_id tripId");
+  if (existing) {
     res.status(400).json({
       success: false,
-      message: "Finish your current trip first",
-      activeTripId: busy._id,
+      message: "Is date pe ek trip pehle se hai. Agli date pe naya trip bana sakte ho.",
+      existingTripId: existing._id,
     });
-    return null;
+    return false;
   }
-  return shift;
+  return true;
 }
 
 function cityPoolFilter(driver) {
@@ -336,6 +342,7 @@ router.post("/ambulance/trips/create", verifyAmbulanceDriver, async (req, res) =
   try {
     const shift = await requireReadyShift(req, res);
     if (!shift) return;
+    if (!(await assertOneTripToday(req, res))) return;
     const {
       patientName,
       mobileNumber,
@@ -391,6 +398,7 @@ router.post("/ambulance/trips/:id/claim", verifyAmbulanceDriver, async (req, res
   try {
     const shift = await requireReadyShift(req, res);
     if (!shift) return;
+    if (!(await assertOneTripToday(req, res))) return;
     const ambulance = await Ambulance.findById(shift.ambulance);
     if (!ambulance) {
       return res.status(400).json({ success: false, message: "Checked-in vehicle not found" });
