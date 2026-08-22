@@ -4,7 +4,7 @@ import Badge from "../components/Badge.jsx";
 import Modal from "../components/Modal.jsx";
 import { ambulanceAdminApi } from "../api.js";
 
-const empty = { vehicleNumber: "", type: "BLS", notes: "" };
+const empty = { vehicleNumber: "", notes: "" };
 
 export default function Fleet() {
   const [rows, setRows] = useState([]);
@@ -83,7 +83,6 @@ export default function Fleet() {
               <thead className="bg-slate-50 text-slate-500 text-left">
                 <tr>
                   <th className="px-4 py-2 font-medium">Vehicle</th>
-                  <th className="px-4 py-2 font-medium">Type</th>
                   <th className="px-4 py-2 font-medium">City</th>
                   <th className="px-4 py-2 font-medium">Status</th>
                   <th className="px-4 py-2 font-medium"></th>
@@ -93,7 +92,6 @@ export default function Fleet() {
                 {rows.map((a) => (
                   <tr key={a.id} className="border-t border-slate-100">
                     <td className="px-4 py-3 font-semibold">{a.vehicleNumber}</td>
-                    <td className="px-4 py-3">{a.type}</td>
                     <td className="px-4 py-3">{a.city || "—"}</td>
                     <td className="px-4 py-3">
                       <Badge>{a.status}</Badge>
@@ -105,7 +103,6 @@ export default function Fleet() {
                           setEditing(a);
                           setEditForm({
                             vehicleNumber: a.vehicleNumber,
-                            type: a.type,
                             status: a.status,
                             notes: a.notes || "",
                             isActive: a.isActive !== false,
@@ -136,18 +133,6 @@ export default function Fleet() {
             />
           </div>
           <div>
-            <label className="label">Type</label>
-            <select
-              className="input"
-              value={form.type}
-              onChange={(e) => setForm({ ...form, type: e.target.value })}
-            >
-              <option>BLS</option>
-              <option>ALS</option>
-              <option>ICU</option>
-            </select>
-          </div>
-          <div>
             <label className="label">Notes</label>
             <input
               className="input"
@@ -171,18 +156,6 @@ export default function Fleet() {
                 value={editForm.vehicleNumber}
                 onChange={(e) => setEditForm({ ...editForm, vehicleNumber: e.target.value })}
               />
-            </div>
-            <div>
-              <label className="label">Type</label>
-              <select
-                className="input"
-                value={editForm.type}
-                onChange={(e) => setEditForm({ ...editForm, type: e.target.value })}
-              >
-                <option>BLS</option>
-                <option>ALS</option>
-                <option>ICU</option>
-              </select>
             </div>
             <div>
               <label className="label">Status</label>

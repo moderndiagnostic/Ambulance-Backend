@@ -438,6 +438,7 @@ function formatShiftAdmin(s) {
     checkInOdometerPhotoUrl: s.checkInOdometerPhotoUrl || "",
     checkInVehiclePhotoUrl: s.checkInVehiclePhotoUrl || "",
     checkOutOdometerPhotoUrl: s.checkOutOdometerPhotoUrl || "",
+    checkOutVehiclePhotoUrl: s.checkOutVehiclePhotoUrl || "",
     gpsKm: s.gpsKm || 0,
     condition: s.condition || {},
     legs: s.legs || [],

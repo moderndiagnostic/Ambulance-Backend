@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import Topbar from "../components/Topbar.jsx";
 import { ambulanceAdminApi } from "../api.js";
 import { downloadExcel } from "../lib/excel.js";
+import { SHOW_PATIENT } from "../showPatient.js";
 
 function todayKey() {
   const d = new Date();
@@ -100,10 +101,8 @@ function tripHeaders() {
     "Driver",
     "Vehicle",
     "Trip ID",
-    "Patient",
-    "Mobile",
+    ...(SHOW_PATIENT ? ["Patient", "Mobile"] : []),
     "Status",
-    "Type",
     "Pickup",
     "Drop",
     "GPS km",
@@ -124,10 +123,8 @@ function tripRows(date, drivers) {
         r.driverName || t.assignedDriverName || "",
         t.vehicleNumber || (r.vehicles || []).join(", "),
         t.tripId || "",
-        t.patientName || "",
-        t.mobileNumber || "",
+        ...(SHOW_PATIENT ? [t.patientName || "", t.mobileNumber || ""] : []),
         t.tripStatus || "",
-        t.requestedType || "",
         t.pickupAddress || "",
         [t.hospitalName, t.dropAddress].filter(Boolean).join(" · "),
         num(t.gpsKm, 0),
@@ -316,7 +313,9 @@ export default function DailySheet() {
                               <tr key={t.id} className="bg-slate-50/80 border-t border-slate-100">
                                 <td className="px-4 py-2 pl-8 text-xs" colSpan={3}>
                                   <span className="font-medium text-brand-600">{t.tripId}</span>{" "}
-                                  {t.patientName} · {t.tripStatus}
+                                  {SHOW_PATIENT
+                                    ? `${t.patientName || ""} · ${t.tripStatus}`
+                                    : t.tripStatus}
                                 </td>
                                 <td className="px-4 py-2 text-xs" colSpan={3}>
                                   {t.pickupAddress || "—"}

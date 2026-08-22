@@ -42,6 +42,7 @@ const ambulanceShiftSchema = new mongoose.Schema(
     checkOutLng: { type: Number, default: null },
     odometerEnd: { type: Number, default: null },
     checkOutOdometerPhotoUrl: { type: String, default: "" },
+    checkOutVehiclePhotoUrl: { type: String, default: "" },
     gpsKm: { type: Number, default: 0 },
     legs: [
       {

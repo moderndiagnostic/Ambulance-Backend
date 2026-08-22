@@ -7,6 +7,7 @@ import DateRangeBar from "../components/DateRangeBar.jsx";
 import DonutChart, { RadialGauge } from "../components/DonutChart.jsx";
 import { useDateRange } from "../hooks/useDateRange.js";
 import { ambulanceAdminApi } from "../api.js";
+import { SHOW_PATIENT } from "../showPatient.js";
 
 const ACTIVE_STATUSES = [
   "Assigned",
@@ -41,7 +42,6 @@ export default function Dashboard() {
 
   const byStatus = data?.byStatus || {};
   const inProgress = ACTIVE_STATUSES.reduce((n, s) => n + (byStatus[s] || 0), 0);
-  const byType = data?.byType || {};
 
   const outcomeSegments = [
     { label: "Completed", value: byStatus.Completed || 0, color: "#0f766e", status: "Completed" },
@@ -49,12 +49,6 @@ export default function Dashboard() {
     { label: "Unassigned", value: byStatus.Unassigned || 0, color: "#d97706", status: "Unassigned" },
     { label: "Cancelled", value: byStatus.Cancelled || 0, color: "#64748b", status: "Cancelled" },
     { label: "Rejected", value: byStatus.Rejected || 0, color: "#e11d48", status: "Rejected" },
-  ];
-
-  const typeSegments = [
-    { label: "BLS", value: byType.BLS || 0, color: "#0369a1" },
-    { label: "ALS", value: byType.ALS || 0, color: "#7c3aed" },
-    { label: "ICU", value: byType.ICU || 0, color: "#be123c" },
   ];
 
   const fleetSegments = [
@@ -97,7 +91,7 @@ export default function Dashboard() {
               />
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
               <DonutChart
                 title="Trip mix"
                 subtitle="Outcome split for selected dates"
@@ -106,13 +100,6 @@ export default function Dashboard() {
                 centerLabel="Trips"
                 emptyText="No trips in this range"
                 onSegmentClick={(s) => goTrips(s.status)}
-              />
-              <DonutChart
-                title="Ambulance type"
-                subtitle="BLS / ALS / ICU demand"
-                segments={typeSegments}
-                centerLabel="Trips"
-                emptyText="No trips in this range"
               />
               <DonutChart
                 title="Fleet status"
@@ -147,7 +134,9 @@ export default function Dashboard() {
                         className="w-full flex items-center justify-between rounded-lg px-3 py-2.5 hover:bg-slate-50 text-left"
                       >
                         <div className="min-w-0">
-                          <div className="text-sm font-medium text-slate-800 truncate">{t.patientName}</div>
+                          <div className="text-sm font-medium text-slate-800 truncate">
+                            {SHOW_PATIENT ? t.patientName || t.tripId || "Trip" : t.tripId || "Trip"}
+                          </div>
                           <div className="text-xs text-slate-400 truncate">
                             {t.tripId} · {t.assignedDriverName || "Unassigned"}
                             {t.vehicleNumber ? ` · ${t.vehicleNumber}` : ""}

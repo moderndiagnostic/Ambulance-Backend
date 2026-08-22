@@ -21,6 +21,7 @@ function publicDriver(d) {
     city: d.city,
     zone: d.zone,
     assignedAmbulance: d.assignedAmbulance,
+    photoUrl: d.photoUrl || "",
   };
 }
 

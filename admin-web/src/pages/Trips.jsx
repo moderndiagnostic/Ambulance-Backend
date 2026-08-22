@@ -7,6 +7,7 @@ import TripReplayMap from "../components/TripReplayMap.jsx";
 import DateRangeBar from "../components/DateRangeBar.jsx";
 import { useDateRange } from "../hooks/useDateRange.js";
 import { ambulanceAdminApi, mediaUrl } from "../api.js";
+import { SHOW_PATIENT } from "../showPatient.js";
 
 const empty = {
   patientName: "",
@@ -14,7 +15,6 @@ const empty = {
   pickupAddress: "",
   dropAddress: "",
   LabName: "",
-  requestedType: "BLS",
   notes: "",
   driverId: "",
   ambulanceId: "",
@@ -246,9 +246,11 @@ export default function Trips() {
               <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
                 <tr>
                   <th className="text-left px-4 py-3 font-medium">Trip</th>
+                  {SHOW_PATIENT ? (
+                    <th className="text-left px-4 py-3 font-medium">Patient</th>
+                  ) : null}
                   <th className="text-left px-4 py-3 font-medium">Assigned driver</th>
                   <th className="text-left px-4 py-3 font-medium">Vehicle</th>
-                  <th className="text-left px-4 py-3 font-medium">Patient</th>
                   <th className="text-left px-4 py-3 font-medium">Pickup</th>
                   <th className="text-left px-4 py-3 font-medium">Drop</th>
                   <th className="text-left px-4 py-3 font-medium">Status</th>
@@ -259,13 +261,13 @@ export default function Trips() {
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
+                    <td colSpan={SHOW_PATIENT ? 9 : 8} className="px-4 py-8 text-center text-slate-400">
                       Loading trips…
                     </td>
                   </tr>
                 ) : trips.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
+                    <td colSpan={SHOW_PATIENT ? 9 : 8} className="px-4 py-8 text-center text-slate-400">
                       No ambulance trips yet.
                     </td>
                   </tr>
@@ -276,15 +278,17 @@ export default function Trips() {
                         <div className="font-semibold text-brand-600">{t.tripId || "—"}</div>
                         <div className="text-[11px] text-slate-400">{fmt(t.createdAt)}</div>
                       </td>
+                      {SHOW_PATIENT ? (
+                        <td className="px-4 py-3">
+                          <div className="font-medium text-slate-800">{t.patientName || "—"}</div>
+                          <div className="text-[11px] text-slate-400">{t.mobileNumber || ""}</div>
+                        </td>
+                      ) : null}
                       <td className="px-4 py-3">
                         <div className="font-medium text-slate-800">{t.assignedDriverName || "Unassigned"}</div>
                       </td>
                       <td className="px-4 py-3">
                         <div className="text-slate-800">{t.vehicleNumber || "—"}</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-slate-800">{t.patientName}</div>
-                        <div className="text-xs text-slate-400">{t.mobileNumber || "—"}</div>
                       </td>
                       <td className="px-4 py-3 max-w-[180px]">
                         <div className="text-slate-700 truncate" title={t.pickupAddress}>
@@ -299,7 +303,6 @@ export default function Trips() {
                       </td>
                       <td className="px-4 py-3">
                         <Badge>{t.tripStatus}</Badge>
-                        <div className="text-[11px] text-slate-400 mt-1">{t.requestedType}</div>
                       </td>
                       <td className="px-4 py-3">
                         {t.kmMismatch ? (
@@ -331,7 +334,6 @@ export default function Trips() {
                               pickupAddress: t.pickupAddress || "",
                               dropAddress: t.dropAddress || "",
                               hospitalName: t.hospitalName || "",
-                              requestedType: t.requestedType || "BLS",
                               notes: t.notes || "",
                             });
                             setFormError("");
@@ -360,23 +362,26 @@ export default function Trips() {
       <Modal open={!!editing} onClose={() => setEditing(null)} title={`Edit ${editing?.tripId || "trip"}`} width="max-w-lg">
         <form onSubmit={submitEdit} className="space-y-3">
           {formError ? <p className="text-rose-600 text-sm">{formError}</p> : null}
-          <div>
-            <label className="label">Patient name</label>
-            <input
-              required
-              className="input"
-              value={editForm.patientName}
-              onChange={(e) => setEditForm({ ...editForm, patientName: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="label">Mobile</label>
-            <input
-              className="input"
-              value={editForm.mobileNumber}
-              onChange={(e) => setEditForm({ ...editForm, mobileNumber: e.target.value })}
-            />
-          </div>
+          {SHOW_PATIENT ? (
+            <>
+              <div>
+                <label className="label">Patient name</label>
+                <input
+                  className="input"
+                  value={editForm.patientName}
+                  onChange={(e) => setEditForm({ ...editForm, patientName: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="label">Mobile</label>
+                <input
+                  className="input"
+                  value={editForm.mobileNumber}
+                  onChange={(e) => setEditForm({ ...editForm, mobileNumber: e.target.value })}
+                />
+              </div>
+            </>
+          ) : null}
           <div>
             <label className="label">Pickup address</label>
             <input
@@ -402,19 +407,7 @@ export default function Trips() {
               value={editForm.dropAddress}
               onChange={(e) => setEditForm({ ...editForm, dropAddress: e.target.value })}
             />
-          </div>
-          <div>
-            <label className="label">Type</label>
-            <select
-              className="input"
-              value={editForm.requestedType}
-              onChange={(e) => setEditForm({ ...editForm, requestedType: e.target.value })}
-            >
-              <option>BLS</option>
-              <option>ALS</option>
-              <option>ICU</option>
-            </select>
-          </div>
+            </div>
           <div>
             <label className="label">Notes</label>
             <input
@@ -439,10 +432,13 @@ export default function Trips() {
             <TripReplayMap trip={viewing} />
 
             <div>
-              <div className="text-xs font-semibold text-slate-400 uppercase mb-1">Patient</div>
-              <Row k="Name" v={viewing.patientName} />
-              <Row k="Mobile" v={viewing.mobileNumber} />
-              <Row k="Type" v={viewing.requestedType} />
+              <div className="text-xs font-semibold text-slate-400 uppercase mb-1">Details</div>
+              {SHOW_PATIENT ? (
+                <>
+                  <Row k="Name" v={viewing.patientName} />
+                  <Row k="Mobile" v={viewing.mobileNumber} />
+                </>
+              ) : null}
               <Row k="City" v={viewing.city} />
               <Row k="Notes" v={viewing.notes} />
             </div>

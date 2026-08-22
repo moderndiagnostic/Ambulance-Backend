@@ -98,6 +98,7 @@ export default function Shifts() {
                         <ShiftPhoto url={s.checkInOdometerPhotoUrl} label="Check-in odo" />
                         <ShiftPhoto url={s.checkInVehiclePhotoUrl} label="Check-in vehicle" />
                         <ShiftPhoto url={s.checkOutOdometerPhotoUrl} label="Check-out odo" />
+                        <ShiftPhoto url={s.checkOutVehiclePhotoUrl} label="Check-out vehicle" />
                       </div>
                     </div>
                     <button

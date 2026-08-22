@@ -50,6 +50,7 @@ const ambulanceDriverSchema = new mongoose.Schema(
     ],
     todayDistanceKm: { type: Number, default: 0 },
     todayDistanceDateKey: { type: String, default: "" },
+    photoUrl: { type: String, default: "" },
     pushToken: { type: String, default: "" },
   },
   { timestamps: true }
